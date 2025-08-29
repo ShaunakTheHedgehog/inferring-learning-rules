@@ -1,0 +1,114 @@
+Metadata-Version: 2.4
+Name: sparse
+Version: 0.17.0
+Summary: Sparse n-dimensional arrays for the PyData ecosystem
+Maintainer-email: Hameer Abbasi <hameerabbasi@yahoo.com>
+License: BSD 3-Clause License
+        
+        Copyright (c) 2018, Sparse developers
+        All rights reserved.
+        
+        Redistribution and use in source and binary forms, with or without
+        modification, are permitted provided that the following conditions are met:
+        
+        * Redistributions of source code must retain the above copyright notice, this
+          list of conditions and the following disclaimer.
+        
+        * Redistributions in binary form must reproduce the above copyright notice,
+          this list of conditions and the following disclaimer in the documentation
+          and/or other materials provided with the distribution.
+        
+        * Neither the name of the copyright holder nor the names of its
+          contributors may be used to endorse or promote products derived from
+          this software without specific prior written permission.
+        
+        THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+        AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+        IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+        DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+        FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+        DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+        SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+        CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+        OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+        OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+        
+Project-URL: Documentation, https://sparse.pydata.org/
+Project-URL: Source, https://github.com/pydata/sparse/
+Project-URL: Repository, https://github.com/pydata/sparse.git
+Project-URL: Issue Tracker, https://github.com/pydata/sparse/issues
+Project-URL: Discussions, https://github.com/pydata/sparse/discussions
+Keywords: sparse,numpy,scipy,dask
+Classifier: Development Status :: 2 - Pre-Alpha
+Classifier: Operating System :: OS Independent
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Science/Research
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy>=1.17
+Requires-Dist: numba>=0.49
+Provides-Extra: docs
+Requires-Dist: mkdocs-material; extra == "docs"
+Requires-Dist: mkdocstrings[python]; extra == "docs"
+Requires-Dist: mkdocs-gen-files; extra == "docs"
+Requires-Dist: mkdocs-literate-nav; extra == "docs"
+Requires-Dist: mkdocs-section-index; extra == "docs"
+Requires-Dist: mkdocs-jupyter; extra == "docs"
+Requires-Dist: sparse[extras]; extra == "docs"
+Provides-Extra: extras
+Requires-Dist: dask[array]; extra == "extras"
+Requires-Dist: sparse[finch]; extra == "extras"
+Requires-Dist: scipy; extra == "extras"
+Requires-Dist: scikit-learn; extra == "extras"
+Requires-Dist: networkx; extra == "extras"
+Provides-Extra: tests
+Requires-Dist: sparse[extras]; extra == "tests"
+Requires-Dist: pytest>=3.5; extra == "tests"
+Requires-Dist: pytest-cov; extra == "tests"
+Requires-Dist: pytest-xdist; extra == "tests"
+Requires-Dist: pre-commit; extra == "tests"
+Requires-Dist: pytest-codspeed; extra == "tests"
+Provides-Extra: tox
+Requires-Dist: sparse[tests]; extra == "tox"
+Requires-Dist: tox; extra == "tox"
+Provides-Extra: notebooks
+Requires-Dist: sparse[tests]; extra == "notebooks"
+Requires-Dist: nbmake; extra == "notebooks"
+Requires-Dist: matplotlib; extra == "notebooks"
+Provides-Extra: all
+Requires-Dist: sparse[docs,mlir,notebooks,tox]; extra == "all"
+Requires-Dist: matrepr; extra == "all"
+Provides-Extra: finch
+Requires-Dist: finch-tensor>=0.2.12; extra == "finch"
+Provides-Extra: mlir
+Requires-Dist: finch-mlir>=0.0.2; extra == "mlir"
+Dynamic: license-file
+
+![Sparse](docs/assets/images/logo_with_text.svg)
+
+# Sparse Multidimensional Arrays
+
+[![Build Status](https://github.com/pydata/sparse/actions/workflows/ci.yml/badge.svg)](
+  https://github.com/pydata/sparse/actions/workflows/ci.yml)
+[![Docs Status](https://readthedocs.org/projects/sparse-nd/badge/?version=latest)](
+  http://sparse.pydata.org/en/latest/?badge=latest)
+[![Coverage](https://codecov.io/gh/pydata/sparse/branch/main/graph/badge.svg)](
+  https://codecov.io/gh/pydata/sparse)
+
+## This library provides multi-dimensional sparse arrays.
+
+- 📚 [Documentation](http://sparse.pydata.org)
+
+- 🙌 [Contributing](https://github.com/pydata/sparse/blob/main/docs/contributing.md)
+
+- 🪲 [Bug Reports/Feature Requests](https://github.com/pydata/sparse/issues)
+
+- 💬 [Discord Server](https://discord.gg/vur45CbwMz) [Channel](https://discord.com/channels/786703927705862175/1301155724646289420)

@@ -1,0 +1,48 @@
+Metadata-Version: 2.4
+Name: iblutil
+Version: 1.20.0
+Summary: Utillity functions and classes for IBL data analysis with minimal dependencies
+Author: IBL Staff
+License: MIT
+Project-URL: Homepage, https://github.com/int-brain-lab/iblutil
+Project-URL: Documentation, https://github.com/int-brain-lab/iblutil
+Project-URL: Repository, https://github.com/int-brain-lab/iblutil
+Project-URL: Issues, https://github.com/int-brain-lab/iblutil/issues
+Project-URL: Changelog, https://github.com/int-brain-lab/iblutil/blob/main/CHANGELOG.md
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: colorlog>=6.0.0
+Requires-Dist: numba>0.53.1
+Requires-Dist: numpy>=1.18
+Requires-Dist: pandas>=0.24.2
+Requires-Dist: pyarrow
+Requires-Dist: tqdm>=4.32.1
+Requires-Dist: packaging
+Requires-Dist: scipy
+Dynamic: license-file
+
+# iblutil
+![CI workflow](https://github.com/int-brain-lab/iblrplate/actions/workflows/main.yaml/badge.svg?branch=main)
+[![Coverage Status](https://coveralls.io/repos/github/int-brain-lab/iblrplate/badge.svg?branch=main)](https://coveralls.io/github/int-brain-lab/iblrplate?branch=main)
+
+Small utilities with minimal dependencies, tests run on Python 3.10 and 3.13
+
+## Installation 
+
+```
+pip install iblutil
+```
+
+
+## Contribution guide
+
+Install the `requirements-dev.txt` dependencies.
+
+Release checklist:
+- Python tests pass ./iblutil/tests
+- `ruff check` passes
+- update `CHANGELOG.md`
+- update version number in `./iblutil/__init__.py`
+- PR to main
+- release on github.com with tag `X.X.X`. This will trigger an upload to pypi

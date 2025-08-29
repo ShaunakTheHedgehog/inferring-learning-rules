@@ -1,0 +1,5 @@
+ibldsp
+neuropixel
+neurowaveforms
+spikeglx
+tests

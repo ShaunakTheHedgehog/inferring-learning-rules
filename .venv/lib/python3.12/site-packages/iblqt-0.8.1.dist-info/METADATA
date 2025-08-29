@@ -1,0 +1,40 @@
+Metadata-Version: 2.3
+Name: iblqt
+Version: 0.8.1
+Summary: A collection of extensions to the Qt framework.
+Keywords: pyqt,qt,pyside,qtpy
+Author: Florian Rau
+Author-email: Florian Rau <bimac@users.noreply.github.com>
+License: MIT
+Requires-Dist: qtpy>=2.4.1
+Requires-Dist: pandas>2.0
+Requires-Dist: numpy
+Requires-Dist: pyqtgraph>=0.13.7
+Requires-Dist: one-api>=3.0.0
+Requires-Dist: iblutil>=1.20.0
+Requires-Dist: pyqt5 ; extra == 'pyqt5'
+Requires-Dist: pyqtwebengine ; extra == 'pyqt5'
+Requires-Dist: pyqt6 ; extra == 'pyqt6'
+Requires-Dist: pyqt6-webengine ; extra == 'pyqt6'
+Requires-Dist: pyside6 ; extra == 'pyside6'
+Requires-Python: >=3.10
+Project-URL: Changelog, https://github.com/int-brain-lab/iblqt/blob/main/CHANGELOG.md
+Project-URL: Documentation, https://int-brain-lab.github.io/iblqt/
+Project-URL: Homepage, https://github.com/int-brain-lab/iblqt/
+Project-URL: Issues, https://github.com/int-brain-lab/iblqt/issues
+Project-URL: Repository, https://github.com/int-brain-lab/iblqt.git
+Provides-Extra: pyqt5
+Provides-Extra: pyqt6
+Provides-Extra: pyside6
+Description-Content-Type: text/markdown
+
+# iblqt
+
+A collection of extensions to the Qt framework.
+
+The full API documentation is available [here](https://int-brain-lab.github.io/iblqt).
+
+![License](https://img.shields.io/github/license/int-brain-lab/iblqt)
+[![GitHub tag](https://img.shields.io/github/v/tag/int-brain-lab/iblqt)](https://github.com/int-brain-lab/iblqt/tags)
+[![PyPI](https://img.shields.io/pypi/v/iblqt)](https://pypi.org/project/iblqt/)
+[![Coverage Status](https://coveralls.io/repos/github/int-brain-lab/iblqt/badge.svg)](https://coveralls.io/github/int-brain-lab/iblqt)

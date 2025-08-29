@@ -1,0 +1,75 @@
+Metadata-Version: 2.4
+Name: iblatlas
+Version: 0.9.0
+Summary: IBL atlas module
+Author-email: IBL staff <info@internationalbrainlab.org>
+License: MIT License
+        
+        Copyright (c) 2023 International Brain Laboratory
+        
+        Permission is hereby granted, free of charge, to any person obtaining a copy
+        of this software and associated documentation files (the "Software"), to deal
+        in the Software without restriction, including without limitation the rights
+        to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+        copies of the Software, and to permit persons to whom the Software is
+        furnished to do so, subject to the following conditions:
+        
+        The above copyright notice and this permission notice shall be included in all
+        copies or substantial portions of the Software.
+        
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+        IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+        FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+        LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+        OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+        SOFTWARE.
+        
+Project-URL: Homepage, https://github.com/int-brain-lab/iblatlas
+Project-URL: Documentation, https://github.com/int-brain-lab/iblatlas/tree/main/examples
+Project-URL: ChangeLog, https://github.com/int-brain-lab/iblatlas/blob/main/CHANGELOG.md
+Project-URL: Bug Tracker, https://github.com/int-brain-lab/iblatlas/issues
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: ONE-api
+Requires-Dist: iblutil
+Requires-Dist: pynrrd
+Requires-Dist: numpy
+Requires-Dist: matplotlib
+Requires-Dist: scipy
+Provides-Extra: gui
+Requires-Dist: pyqt5; extra == "gui"
+Requires-Dist: qtpy; extra == "gui"
+Dynamic: license-file
+
+# iblatlas
+Tools to manipulate hierarchical 3D representations of the mouse brain anatomy for electrophysiolgy experiments.
+The tools are mainly using the Allen CCF although some other atlases can be used.
+
+**This repository uses minimal requirements, based of standard `matplotlib`, `numpy` and `scipy` libraries, to the exclusion
+of more complex visualization tools such as `pyqt`.**
+
+## Documentation
+[Full package documentation](https://int-brain-lab.github.io/iblenv/_autosummary/iblatlas.html#module-iblatlas)
+
+[Notebooks and examples](https://int-brain-lab.github.io/iblenv/notebooks_external/atlas_working_with_ibllib_atlas.html)
+
+## Installation
+`pip install iblatlas`
+
+For GUI features, you'll need to install with optional dependencies:
+`pip install iblatlas[gui]`
+
+## Contributing
+Changes are merged by pull requests.
+Release checklist:
+- [x] Update version in `iblatlas/__init__.py`
+- [x] Update `CHANGELOG.md`
+- [x] Create a pull request to the `main` branch on GitHub
+- [x] Once the PR is merged, create a new tag and push the tag
+
+Once a tag is pushed on main the package is uploaded to PyPI using GitHub Actions.

@@ -1,0 +1,6 @@
+[console_scripts]
+mtschop = mtscomp:mtschop
+mtscomp = mtscomp:mtscomp
+mtsdecomp = mtscomp:mtsdecomp
+mtsdesc = mtscomp:mtsdesc
+

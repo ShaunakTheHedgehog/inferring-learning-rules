@@ -1,0 +1,32 @@
+Metadata-Version: 2.1
+Name: phylib
+Version: 2.6.1
+Summary: Ephys data analysis for thousands of channels
+Home-page: https://github.com/cortex-lab/phylib
+Author: Cyrille Rossant
+Author-email: cyrille.rossant@gmail.com
+License: BSD
+Keywords: phy,data analysis,electrophysiology,neuroscience
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Natural Language :: English
+Classifier: Framework :: IPython
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.7
+Description-Content-Type: text/markdown
+License-File: LICENSE.md
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: dask
+Requires-Dist: requests
+Requires-Dist: tqdm
+Requires-Dist: toolz
+Requires-Dist: joblib
+Requires-Dist: mtscomp
+
+# phylib
+[![Build Status](https://img.shields.io/travis/cortex-lab/phylib.svg)](https://travis-ci.org/cortex-lab/phylib)
+[![codecov.io](https://img.shields.io/codecov/c/github/cortex-lab/phylib.svg)](http://codecov.io/github/cortex-lab/phylib?branch=master)
+
+Electrophysiological data analysis library used by [phy](https://github.com/kwikteam/phy/), a spike sorting visualization software, and [ibllib](https://github.com/int-brain-lab/ibllib/).

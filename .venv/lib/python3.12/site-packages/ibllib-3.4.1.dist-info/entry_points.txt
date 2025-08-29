@@ -1,0 +1,2 @@
+[console_scripts]
+task_qc = ibllib.qc.task_qc_viewer.task_qc:qc_gui_cli

@@ -1,0 +1,2 @@
+[gui_scripts]
+atlas = iblatlas.gui.atlasview:main

@@ -1,0 +1,69 @@
+Metadata-Version: 2.1
+Name: slidingRP
+Version: 1.1.1
+Summary: Quality metric from spike trains
+Home-page: https://github.com/SteinmetzLab/slidingRefractory
+Author: Noam Roth
+Project-URL: Bug Tracker, https://github.com/SteinmetzLab/slidingRefractory/issues
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: numpy
+Requires-Dist: scipy
+Requires-Dist: matplotlib
+Requires-Dist: colorcet
+Requires-Dist: statsmodels
+
+# slidingRefractory
+Code to perform a new test of whether neurons have contaminated refractory periods, with a sliding window
+
+
+## Python
+
+### Installation
+Install using pip:
+```commandline
+pip install slidingRP
+```
+
+Install using sources in development mode. First clone the repository.
+```commandline
+cd slidingRefractory
+pip install -e .
+```
+
+### Minimal working example
+
+```python
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+from slidingRP import metrics
+
+# get the small test datasets from the github repository first
+repo_path = "/home/ibladmin/Documents/PYTHON/int-brain-lab/slidingRefractory"
+TEST_DATA_PATH = Path(repo_path).joinpath("test-data", "integration")
+
+params = {'sampleRate': 30000, 'binSizeCorr': 1 / 30000}
+spikes = pd.read_parquet(TEST_DATA_PATH.joinpath('spikes.pqt'))
+table = metrics.slidingRP_all(spikes.times, spikes.clusters, **params)
+
+assert np.allclose(pd.read_parquet(TEST_DATA_PATH.joinpath("rp_table.pqt")), pd.DataFrame(table), equal_nan=True)
+```
+
+### Contribute
+#### Run unit tests
+```commandline
+ pytest python/test_*
+```
+
+#### Upload package
+```commandline
+rm -fR dist
+rm -fR build
+python setup.py sdist bdist_wheel
+twine upload dist/*
+```
