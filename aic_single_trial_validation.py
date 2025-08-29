@@ -8,6 +8,8 @@ from jax.tree_util import tree_map
 import numpy as np
 import pickle as pkl
 
+
+import concurrent.futures
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import matplotlib.colors as mcolors
@@ -91,6 +93,64 @@ def single_trial_simulated_aic_test(true_learning_rule, true_model_type, key, se
     AICs = 2 * nlls + 2 * ps
 
     return nlls, AICs, true_hyperparams_arr, inferred_hyperparams_collection
+
+
+
+
+# Helper function for parallel execution (must be top-level for pickling)
+def _single_trial_worker(args):
+    (true_learning_rule, true_model_type, key, session_info, num_opt_seeds, fixed_alpha, fixed_beta, fixed_w0) = args
+    return single_trial_simulated_aic_test(
+        true_learning_rule, true_model_type, key, session_info=session_info,
+        num_opt_seeds=num_opt_seeds, fixed_alpha=fixed_alpha,
+        fixed_beta=fixed_beta, fixed_w0=fixed_w0
+    )
+
+def multi_trial_simulated_aic_test(true_learning_rule, true_model_type, num_trials, key, session_info=(40, 4, 30, 10), 
+                                   num_opt_seeds=15, fixed_alpha=None, fixed_beta=None, fixed_w0=None, save_data=True, filename='single_trial_tests'):
+    assert true_learning_rule in ['gd', 'te']
+    assert true_model_type in ['two-layer', 'one-layer']
+    true_num_params = 11
+    if true_model_type == 'one-layer':
+        true_num_params = 8
+
+    all_nlls = np.zeros((num_trials, 5))
+    all_AICs = np.zeros((num_trials, 5))
+    true_hyperparams_set = np.zeros((num_trials, true_num_params))
+    inferred_hyperparams_set = np.zeros((num_trials, 4, 11))
+
+    # Prepare keys for each trial
+    keys = []
+    curr_key = key
+    for _ in range(num_trials):
+        _, curr_key = jr.split(curr_key, 2)
+        keys.append(curr_key)
+
+    # Prepare arguments for each trial
+    args_list = [
+        (true_learning_rule, true_model_type, keys[i], session_info, num_opt_seeds, fixed_alpha, fixed_beta, fixed_w0)
+        for i in range(num_trials)
+    ]
+
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        results = list(executor.map(_single_trial_worker, args_list))
+
+    for i, (nlls, AICs, true_hyperparams_arr, inferred_hyperparams_collection) in enumerate(results):
+        all_nlls[i] = nlls 
+        all_AICs[i] = AICs
+        true_hyperparams_set[i] = true_hyperparams_arr 
+        inferred_hyperparams_set[i] = inferred_hyperparams_collection
+
+    results_dict = {'nlls' : all_nlls, 'AICs' : all_AICs, 
+                    'true_hyperparams' : true_hyperparams_set,
+                    'all_inferred_hyperparams' : inferred_hyperparams_set}
+    
+    if save_data:
+        full_filename = f'{filename}_{true_learning_rule}_{true_model_type}_numtrials_{num_trials}_numoptseeds{num_opt_seeds}_truealpha{fixed_alpha}_truebeta{fixed_beta}.pkl'
+        with open(full_filename, 'wb') as file:
+            pkl.dump(results_dict, file)
+
+    return results_dict
 
 
 if __name__=="__main__":
