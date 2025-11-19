@@ -1,1 +1,0 @@
-"""Interactive task QC viewer."""
