@@ -1,0 +1,55 @@
+# Ignore everything by default
+*
+
+# But allow directories so we can whitelist specific file patterns
+!*/
+
+# Allow Python source files (recursively)
+!*.py
+!**/*.py
+
+# Explicitly ignore common virtual environment folders
+.venv/
+venv/
+env/
+ENV/
+
+# Ignore large support folder used for figures and data
+/alex_figure_1_4_supp_1/
+
+# Ignore the example training script explicitly (keep it untracked)
+/examples/train_metric_gd_example.py
+train_metric_gd_example.py
+
+# Common Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment and environment files
+venv/
+env/
+ENV/
+.env
+
+# Jupyter
+*.ipynb
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+
+# Pickle / data outputs
+*.pkl
+*.npy
+*.npz
+
+# Matplotlib cache
+.cache/
