@@ -140,6 +140,25 @@ def generate_graded_contrast_inputs(num_samples_per_grading, num_zero_contrast, 
     return inputs, targets, mask
 
 
+def generate_randomized_multisession_graded_data(num_sessions, num_gradings, num_samples_per_grading, 
+                                                 num_zero_contrast_per_session, key):
+    full_inputs, full_targets, full_mask = None, None, None
+    for i in range(num_sessions):
+        _, key = jr.split(key, 2)
+        inputs, targets, mask = generate_graded_contrast_inputs(num_samples_per_grading, num_zero_contrast_per_session, key, num_gradings)
+
+        if full_inputs is None:
+            full_inputs = inputs
+            full_targets = targets 
+            full_mask = mask 
+        else:
+            full_inputs = jnp.concatenate([full_inputs, inputs], axis=0)
+            full_targets = jnp.concatenate([full_targets, targets], axis=0)
+            full_mask = jnp.concatenate([full_mask, mask])
+
+    return full_inputs, full_targets, full_mask
+
+
 def generate_multisession_graded_data(num_sessions, num_gradings, num_samples_per_grading, num_zero_contrast, key):
     inputs, targets, mask = generate_graded_contrast_inputs(num_samples_per_grading, num_zero_contrast, key, num_grading_levels=num_gradings)
     full_inputs = jnp.tile(inputs, (num_sessions, 1))
@@ -209,9 +228,29 @@ def plot_R_ZB_L_trial_stats(all_stats, ylabel, benchmark_line=None, title=None, 
         plt.title(title)
 
 
+def compute_rightward_statistics(inputs, choices):
+    rightward_statistics = np.zeros((2, 3))
+    ntrials = inputs.shape[0]
+    for i in range(ntrials):
+        input = inputs[i]
+        choice = choices[i]     # should be 0 if input rightward, and 1 if input leftward
+        assert (input[1] == 0) or (input[2] == 0)
+
+        if input[1] > 0:
+            rightward_statistics[1, 0] += 1
+            rightward_statistics[0, 0] += (1 - choice)
+        elif input[2] > 0:
+            rightward_statistics[1, 2] += 1
+            rightward_statistics[0, 2] += (1 - choice)
+        else:
+            rightward_statistics[1, 1] += 1
+            rightward_statistics[0, 1] += (1 - choice)
+    return rightward_statistics
+
+
 def calculate_model_agnostic_bias(rightward_statistics, zero_contrast_fraction):
     z = zero_contrast_fraction
-    props = rightward_statistics[0] / rightward_statistics[1]
+    props = rightward_statistics[0] / np.maximum(rightward_statistics[1], 1.)   # avoid edge cases where denominator is 0
     avg_p_R = (0.5 - z/2.) * props[0] + z * props[1] + (0.5 - z/2.) * props[2]
     return 2 * (avg_p_R - 0.5)      # ensure output ranges from -1 to 1, with 0 being "balanced"
 
@@ -293,7 +332,7 @@ def show_histogram(trial_data, bins=10, title=None):
     plt.show()
 
 
-def plot_sweep_results(results_dict, threshold=0.1):
+def plot_sweep_results(results_dict, threshold=0.1, xlim=5_000):
     eff_num_trials = results_dict['eff_num_trials']
     print(f'\nEffective number of trials: {eff_num_trials}')
     num_models = len(eff_num_trials)
@@ -310,10 +349,10 @@ def plot_sweep_results(results_dict, threshold=0.1):
 
     idx_to_color={0 : 'darkgreen', 1: 'darkorange', 2: 'darkviolet'}
 
-    fig, axs = plt.subplots(4, 1, figsize=(8, 16))
+    fig, axs = plt.subplots(4, 1, figsize=(8, 20))
     plt.xlabel('Iterations', fontsize=18)
-    plt.xticks(fontsize=18)
-    plt.yticks(fontsize=18)
+    # plt.xticks(fontsize=18)
+    # plt.yticks(fontsize=18)
 
     axs[0].set_ylabel('Accuracy', fontsize=18)
     axs[1].set_ylabel('Slope Difference (R - L)', fontsize=18)
@@ -321,9 +360,9 @@ def plot_sweep_results(results_dict, threshold=0.1):
     axs[3].set_ylabel('Stim DA Bias', fontsize=18)
 
     axs[0].set_xlim(0, 40)
-    axs[1].set_xlim(0, 10_000)
-    axs[2].set_xlim(0, 10_000)
-    axs[3].set_xlim(0, 10_000)
+    axs[1].set_xlim(0, xlim)
+    axs[2].set_xlim(0, xlim)
+    axs[3].set_xlim(0, xlim)
 
     avg_accs = np.zeros((3, accuracies.shape[-1]))
     avg_slope_diffs = np.zeros((3, slope_diffs.shape[-1]))
@@ -355,12 +394,15 @@ def plot_sweep_results(results_dict, threshold=0.1):
 
         axs[1].plot(slope_diffs[i, :trials], color=color, alpha=0.5)
         axs[1].plot(trials-1, slope_diffs[i, trials-1], marker='o', color='cadetblue', alpha=0.5)
+        axs[1].set_ylim(-0.8, 0.8)
 
         axs[2].plot(biases[i, :trials], color=color, alpha=0.5)
         axs[2].plot(trials-1, biases[i, trials-1], marker='o', color='cadetblue', alpha=0.5)
+        axs[2].set_ylim(-0.5, 0.5)
 
         axs[3].plot(stim_DA_biases[i, :trials], color=color, alpha=0.5)
         axs[3].plot(trials-1, stim_DA_biases[i, trials-1], marker='o', color='cadetblue', alpha=0.5)
+        axs[3].set_ylim(-0.5, 0.5)
 
         avg_accs[idx] += accuracies[i]
         avg_slope_diffs[idx] += slope_diffs[i]
@@ -391,6 +433,18 @@ def flatten_params(w):
         else:
             params_matrix = jnp.concatenate((params_matrix, w[key].reshape(w[key].shape[0], -1)), axis=-1)
     return params_matrix 
+
+
+def compute_two_layer_flattened_net_params(w):
+    # w is T x 9 
+    W1_diag = w[:, :3]          # shape (T, 3)
+    W2 = w[:, 3:].reshape(-1, 2, 3)  # shape (T, 2, 3)
+    
+    # Multiply columns of W2 by diagonal entries of W1
+    result = W2 * W1_diag[:, None, :]   # shape (T, 2, 3)
+    
+    # Flatten last two dims
+    return result.reshape(-1, 6)        # shape (T, 6)
 
 
 def turn_pytree_to_arr(tree):
@@ -427,3 +481,53 @@ def realign_weight_trajectories(true_ws, inferred_ws):
 
 def compute_AIC(nll, num_params):
     return 2 * nll + 2 * num_params 
+
+
+
+def stratified_quantile_split_indices(data, K, n_bins=10, random_state=None):
+    """
+    Stratified split of 1D data into train/test using quantile bins.
+    Returns indices so you can apply them to multiple arrays.
+
+    Args:
+        data (list or np.array): Values between -1 and 1.
+        K (int): Number of training samples.
+        n_bins (int): Number of quantile bins to stratify over.
+        random_state (int or None): Random seed.
+
+    Returns:
+        train_idx (np.array), test_idx (np.array)
+    """
+    rng = np.random.default_rng(random_state)
+    data = np.array(data)
+    N = len(data)
+
+    # Compute quantile bin edges
+    quantiles = np.linspace(0, 1, n_bins + 1)
+    bin_edges = np.quantile(data, quantiles)
+
+    # Assign each point to a bin
+    bin_ids = np.digitize(data, bin_edges[1:-1])
+
+    # Desired ratio
+    train_ratio = 1. * K / N
+
+    train_idx, test_idx = [], []
+
+    # Stratified sampling within each bin
+    for b in range(n_bins):
+        bin_indices = np.where(bin_ids == b)[0]
+        rng.shuffle(bin_indices)
+
+        n_train_bin = int(round(train_ratio * len(bin_indices)))
+        train_idx.extend(bin_indices[:n_train_bin])
+        test_idx.extend(bin_indices[n_train_bin:])
+
+    # Fix rounding mismatches
+    rng.shuffle(train_idx)
+    rng.shuffle(test_idx)
+    train_idx = np.array(train_idx)[:K]
+    test_idx = np.array(test_idx)[:N - K]
+
+    return train_idx, test_idx
+

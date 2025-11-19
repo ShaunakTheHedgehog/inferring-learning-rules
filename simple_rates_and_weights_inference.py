@@ -19,15 +19,13 @@ import matplotlib.cm as cm
 import matplotlib.colors as mcolors
 import seaborn as sns
 import pandas as pd
-import pdb
 
-# from flax import linen as nn
 import functools
 import random
 import math
 from shallow_linear_net import shallow_net, shallow_net_params, fit_shallow_model
 from deep_linear_net import cortico_striatal_net, random_init_params, fit_deep_net
-from utils import generate_multisession_graded_data, calculate_model_agnostic_bias, calculate_session_accs, flatten_params, turn_pytree_to_arr, realign_weight_trajectories, combine_batch_weights
+from utils import generate_multisession_graded_data, calculate_model_agnostic_bias, calculate_session_accs, flatten_params, turn_pytree_to_arr, realign_weight_trajectories, combine_batch_weights, stratified_quantile_split_indices, compute_two_layer_flattened_net_params, generate_randomized_multisession_graded_data
 
 
 def run_onelayer_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, learning_rule, hyperparams_is_list):
@@ -37,6 +35,8 @@ def run_onelayer_forward_weight_trajectory(hyperparams, inputs, outputs, rewards
     - inputs
     - outputs
     - rewards
+    - learning rule
+    - hyperparams_is_list (True or False)
 
     Returns:
     - total negative log-likelihood of the data given the hyperparams (alphas, beta)
@@ -504,24 +504,6 @@ def sophisticated_fit_params(init_hyperparams, inputs, outputs, rewards, learnin
     return opt_hyperparams
 
 
-# def update_hyperparams(init_hyperparams, w0, inputs, outputs, rewards, n_iters=100, lr=1e-3, alpha_scale=1.):
-
-#     @jit
-#     def _update_step(hyperparams):
-#         total_nll, meta_grads = value_and_grad(compute_nll)(hyperparams, w0, inputs, outputs, rewards, alpha_scale, False)
-#         hyperparams = jax.tree_util.tree_map(lambda p, g: p - lr * g, hyperparams, meta_grads)
-#         return total_nll, hyperparams
-    
-#     total_nlls = []
-#     curr_hyperparams = init_hyperparams
-#     for i in range(n_iters):
-#         total_nll, curr_hyperparams = _update_step(curr_hyperparams)
-
-#         if (i+1) % 100 == 0:
-#             print(f'Iter {i+1}. Total NLL: {total_nll.item()}')
-#             total_nlls.append(total_nll)
-
-#     return curr_hyperparams, total_nlls
 
 def epsilon_ball_test(hyperparams_arr, inputs, outputs, rewards, key, learning_rule='gd', num_samples=25, epsilon=0.01):
     assert learning_rule in ['gd', 'te']
@@ -608,6 +590,13 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, learnin
         print(f'Iter {i+1} Inferred NLL: {inferred_nll} \nGradient: {grad} \nHessian eigvals: {eigvals}')
         print('\n\n')
 
+        print(f'Inferred alpha: {jnp.exp(hyperparams_arr[0])}, Inferred beta: {jnp.exp(hyperparams_arr[1])}')
+        if model_type == 'two-layer':
+            print(f'Inferred W1_diag_0: {hyperparams["W1_diag_0"]}, Inferred W2_0: {hyperparams["W2_0"]}')
+        else:
+            print(f'Inferred W_0: {hyperparams["W"]}')
+        print('\n\n')
+
         if ((min_nll is None and not jnp.isnan(inferred_nll)) or (not jnp.isnan(inferred_nll) and inferred_nll < min_nll)):
             # if eigvals is None or (eigvals[0] < 0):
             #     continue
@@ -622,7 +611,10 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, learnin
 
 
 
-def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_model_type, session_info, key, num_train_sets=1, num_test_sets=1, vary_inputs=False, true_w0=None):
+def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_model_type, 
+                              session_info, key, num_train_sets=1, num_test_sets=1, vary_inputs=False, 
+                              true_w0=None, do_bias_stratified_split=False, one_layer_scale=None,
+                              fixed_inputs=None):
     assert true_learning_rule in ['gd', 'te']
     assert true_model_type in ['two-layer', 'one-layer']
 
@@ -666,23 +658,37 @@ def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_mo
             else:
                 w0, (_, _) = random_init_params(skeys[1], 3, 3, 2, default_tutor_executor=True)
         else:
-            w0, (_, _) = shallow_net_params(skeys[1])
+            if one_layer_scale is None:
+                w0, (_, _) = shallow_net_params(skeys[1])
+            else:
+                w0, (_, _) = shallow_net_params(skeys[1], const_scale=one_layer_scale, stim_scale=one_layer_scale)
     else:
         w0 = true_w0
 
     sskey = skeys[2]
 
     train_test_split = []
-    train_test_dict = {'train_inputs' : [], 'train_outputs' : [], 'train_rewards' : [],
-                       'test_inputs' : [], 'test_outputs' : [], 'test_rewards' : [], 
+
+    full_data_dict = {'inputs' : [], 'outputs' : [], 'rewards' : [], 'q_vals' : [],
+                      'pma_biases' : [], 'ma_biases' : [], 'rightward_stats' : []}
+
+    train_test_dict = {'train_inputs' : [], 'train_outputs' : [], 'train_rewards' : [], 'train_q_vals' : [],
+                       'test_inputs' : [], 'test_outputs' : [], 'test_rewards' : [], 'test_q_vals' : [],
                        'train_pma_biases' : [], 'train_ma_biases' : [], 
                        'test_pma_biases' : [], 'test_ma_biases' : [],
                        'train_rightward_stats' : [], 'test_rightward_stats' : [],
                        'alpha' : true_alpha, 'beta' : true_beta, 'w0' : w0, 'learning_rule' : true_learning_rule,
                        'num_train_sets' : num_train_sets, 'num_test_sets' : num_test_sets}
 
-    inputs, targets, mask = generate_multisession_graded_data(num_sessions, num_grading_levels, num_samples_per_grading, num_zero_contrast, skeys[5])
+    # inputs, targets, mask = generate_multisession_graded_data(num_sessions, num_grading_levels, num_samples_per_grading, num_zero_contrast, skeys[5])
+    inputs, targets, mask = generate_randomized_multisession_graded_data(num_sessions, num_grading_levels, num_samples_per_grading, 
+                                                                         num_zero_contrast, skeys[5])
     inputs = jnp.array(inputs)
+    if fixed_inputs is not None:
+        assert vary_inputs == False
+        inputs = fixed_inputs
+        targets = jnp.argmax(inputs[:, 1:], axis=1)
+        targets = targets.reshape(-1, 1)
 
     for i in range(num_test_sets+num_train_sets):
         _, sskey, ssskey = jr.split(sskey, 3)
@@ -693,7 +699,8 @@ def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_mo
         # inputs, targets, mask = generate_multisession_graded_data(num_sessions, num_grading_levels, num_samples_per_grading, num_zero_contrast, sskey)
 
         if vary_inputs:
-            inputs, _, _ = generate_multisession_graded_data(num_sessions, num_grading_levels, num_samples_per_grading, num_zero_contrast, subkeys[2])
+            inputs, targets, mask = inputs, targets, mask = generate_randomized_multisession_graded_data(num_sessions, num_grading_levels, num_samples_per_grading, 
+                                                                                                         num_zero_contrast, subkeys[2])
             inputs = jnp.array(inputs)
         else:
             inputs = jnp.copy(inputs)
@@ -715,27 +722,66 @@ def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_mo
         # inputs = jnp.array(inputs)
         outputs = jnp.array(results_dict['outputs'])
         rewards = jnp.array(results_dict['rewards'])
+        q_vals = jnp.array(results_dict['q_vals'])
 
         pma_bias, ma_bias, rightward_stats = _show_bias_stats(results_dict, z)
 
-        train_test_split.append((inputs, outputs, rewards, w0_copy2))
-        if i < num_train_sets:
-            train_test_dict['train_inputs'].append(inputs)
-            train_test_dict['train_outputs'].append(outputs)
-            train_test_dict['train_rewards'].append(rewards)
-            train_test_dict['train_pma_biases'].append(pma_bias)
-            train_test_dict['train_ma_biases'].append(ma_bias)
-            train_test_dict['train_rightward_stats'].append(rightward_stats)
-        else:
-            train_test_dict['test_inputs'].append(inputs)
-            train_test_dict['test_outputs'].append(outputs)
-            train_test_dict['test_rewards'].append(rewards)
-            train_test_dict['test_pma_biases'].append(pma_bias)
-            train_test_dict['test_ma_biases'].append(ma_bias)
-            train_test_dict['test_rightward_stats'].append(rightward_stats)
+        full_data_dict['inputs'].append(inputs)
+        full_data_dict['outputs'].append(outputs)
+        full_data_dict['rewards'].append(rewards)
+        full_data_dict['q_vals'].append(q_vals)
+        full_data_dict['pma_biases'].append(pma_bias)
+        full_data_dict['ma_biases'].append(ma_bias)
+        full_data_dict['rightward_stats'].append(rightward_stats)
+    
+    if do_bias_stratified_split:
+        all_ma_biases = np.array(full_data_dict['ma_biases'])
+        train_idxs, test_idxs = stratified_quantile_split_indices(all_ma_biases, K=num_train_sets, n_bins=3, random_state=np.random.randint(1_000))
+    else:
+        train_idxs = np.arange(num_train_sets)
+        test_idxs = np.arange(num_train_sets, num_train_sets + num_test_sets)
+    
+    for idx in train_idxs:
+        w0_copy = jax.tree_util.tree_map(lambda x: jnp.array(x), w0)
+        train_test_split.append((full_data_dict['inputs'][idx], full_data_dict['outputs'][idx], full_data_dict['rewards'][idx], w0_copy))
+    for idx in test_idxs:
+        w0_copy = jax.tree_util.tree_map(lambda x: jnp.array(x), w0)
+        train_test_split.append((full_data_dict['inputs'][idx], full_data_dict['outputs'][idx], full_data_dict['rewards'][idx], w0_copy))
+    
+    train_test_dict['train_inputs'] = [full_data_dict['inputs'][i] for i in train_idxs]
+    train_test_dict['train_outputs'] = [full_data_dict['outputs'][i] for i in train_idxs]
+    train_test_dict['train_rewards'] = [full_data_dict['rewards'][i] for i in train_idxs]
+    train_test_dict['train_q_vals'] = [full_data_dict['q_vals'][i] for i in train_idxs]
+    train_test_dict['train_pma_biases'] = [full_data_dict['pma_biases'][i] for i in train_idxs]
+    train_test_dict['train_ma_biases'] = [full_data_dict['ma_biases'][i] for i in train_idxs]
+    train_test_dict['train_rightward_stats'] = [full_data_dict['rightward_stats'][i] for i in train_idxs]
+    
+    train_test_dict['test_inputs'] = [full_data_dict['inputs'][i] for i in test_idxs]
+    train_test_dict['test_outputs'] = [full_data_dict['outputs'][i] for i in test_idxs]
+    train_test_dict['test_rewards'] = [full_data_dict['rewards'][i] for i in test_idxs]
+    train_test_dict['test_q_vals'] = [full_data_dict['q_vals'][i] for i in test_idxs]
+    train_test_dict['test_pma_biases'] = [full_data_dict['pma_biases'][i] for i in test_idxs]
+    train_test_dict['test_ma_biases'] = [full_data_dict['ma_biases'][i] for i in test_idxs]
+    train_test_dict['test_rightward_stats'] = [full_data_dict['rightward_stats'][i] for i in test_idxs]
+
+    # train_test_split.append((inputs, outputs, rewards, w0_copy2))
+    # if i < num_train_sets:
+    #     train_test_dict['train_inputs'].append(inputs)
+    #     train_test_dict['train_outputs'].append(outputs)
+    #     train_test_dict['train_rewards'].append(rewards)
+    #     train_test_dict['train_pma_biases'].append(pma_bias)
+    #     train_test_dict['train_ma_biases'].append(ma_bias)
+    #     train_test_dict['train_rightward_stats'].append(rightward_stats)
+    # else:
+    #     train_test_dict['test_inputs'].append(inputs)
+    #     train_test_dict['test_outputs'].append(outputs)
+    #     train_test_dict['test_rewards'].append(rewards)
+    #     train_test_dict['test_pma_biases'].append(pma_bias)
+    #     train_test_dict['test_ma_biases'].append(ma_bias)
+    #     train_test_dict['test_rightward_stats'].append(rightward_stats)
     
     for key in train_test_dict.keys():
-        if key in ['train_inputs', 'train_outputs', 'train_rewards', 'test_inputs', 'test_outputs', 'test_rewards']:
+        if key in ['train_inputs', 'train_outputs', 'train_rewards', 'train_q_vals', 'test_inputs', 'test_outputs', 'test_rewards', 'test_q_vals']:
             train_test_dict[key] = jnp.asarray(train_test_dict[key])
     
     return train_test_split, train_test_dict
@@ -773,7 +819,9 @@ def run_test_set_validation(true_hyperparams, inferred_hyperparams, true_learnin
     return
 
 
-def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type, num_trials, key, num_train_per_trial=1, num_test_per_trial=1, session_info=(40, 4, 30, 10), num_opt_seeds=20, fixed_alpha=None, fixed_beta=None, vary_inputs=False, save_data=True, name=''):
+def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type, num_trials, key, num_train_per_trial=1, num_test_per_trial=1, 
+                                             session_info=(40, 4, 30, 10), num_opt_seeds=20, fixed_alpha=None, fixed_beta=None, vary_inputs=False, 
+                                             true_w0=None, do_bias_stratified_split=False, save_data=True, name=''):
     assert true_learning_rule in ['gd', 'te']
     assert true_model_type in ['two-layer', 'one-layer']
     true_num_params = 11
@@ -806,6 +854,7 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
     for i in range(num_trials):
         _, skey, sskey = jr.split(skey, 3)
         skeys = jr.split(sskey, 8)
+        opt_key = skeys[5]
 
         alpha_star, beta_star = None, None
         if fixed_alpha is not None:
@@ -816,7 +865,9 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
             alpha_star = jr.uniform(skeys[1], minval=0.002, maxval=0.02)
             beta_star = jr.uniform(skeys[7], minval=5.0, maxval=15.0)
 
-        datasets, train_test_dict = generate_train_test_split(alpha_star, beta_star, true_learning_rule, true_model_type, session_info, skeys[3], num_train_sets=num_train_per_trial, num_test_sets=num_test_per_trial, vary_inputs=vary_inputs)
+        datasets, train_test_dict = generate_train_test_split(alpha_star, beta_star, true_learning_rule, true_model_type, session_info, 
+                                                              skeys[3], num_train_sets=num_train_per_trial, num_test_sets=num_test_per_trial, 
+                                                              vary_inputs=vary_inputs, true_w0=true_w0, do_bias_stratified_split=do_bias_stratified_split)
         (_, _, _, train_w0) = datasets[0] 
         train_inputs = train_test_dict['train_inputs']
         train_outputs = train_test_dict['train_outputs']
@@ -837,6 +888,7 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
         for j in range(len(model_types)):
             model_type = model_types[j]
             test_learning_rule = test_learning_rules[j]
+            _, opt_key = jr.split(opt_key, 2)
 
             # TRAINING 
             hyperparams_arr = None 
@@ -852,7 +904,7 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
             else:
                 print(f'\nPerforming inference in a {model_type} network with the {test_learning_rule} learning rule...')
                 num_alpha_blocks = 1
-                _, min_nll, hyperparams_arr = run_randomized_optimization_procedure(train_inputs, train_outputs, train_rewards, skeys[5], learning_rule=test_learning_rule, model_type=model_type,
+                _, min_nll, hyperparams_arr = run_randomized_optimization_procedure(train_inputs, train_outputs, train_rewards, opt_key, learning_rule=test_learning_rule, model_type=model_type,
                                                                                     num_seeds=num_opt_seeds, max_iters=1_000, 
                                                                                     tol=1e-6, method='optax',
                                                                                     alpha_init_scale=0.1, beta_init_scale=1., w0_init_scale=0.1, 
@@ -860,7 +912,7 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
                 # hyperparams = {'alpha' : hyperparams_arr[:num_alpha_blocks], 'beta' : hyperparams_arr[num_alpha_blocks], 'W1_diag_0' : hyperparams_arr[num_alpha_blocks+1:num_alpha_blocks+4], 'W2_0' : hyperparams_arr[num_alpha_blocks+4:num_alpha_blocks+10].reshape(2, 3)}
                 train_nlls[i, j] = min_nll
                 inferred_hyperparams_collection[i, j-1, :len(hyperparams_arr)] = hyperparams_arr
-                print(f'Inferred (training) NLL with {test_learning_rule} as the true learning rule: {min_nll}')
+                print(f'Inferred (training) NLL with {test_learning_rule} as the test learning rule: {min_nll}')
 
             alphas[i, j] = jnp.exp(hyperparams_arr[0])
             betas[i, j] = jnp.exp(hyperparams_arr[1])
@@ -1020,7 +1072,7 @@ def one_layer_approximation():
 
 
 def main():
-    key = jr.PRNGKey(92)   
+    key = jr.PRNGKey(774)   
     _, key, skey = jr.split(key, 3)
 
     # _, key, skey, sskey, ssskey, sssskey = jr.split(key, 6)
@@ -1098,15 +1150,15 @@ def main():
     alpha_star = 0.003
     beta_star = 10. 
     true_learning_rule = 'gd'
-    true_model_type = 'one-layer'
+    true_model_type = 'two-layer'
     num_sessions = 40
     num_grading_levels = 4
     num_samples_per_grading = 30
     num_zero_contrast = 10
     session_info = (num_sessions, num_grading_levels, num_samples_per_grading, num_zero_contrast)
 
-    num_test_sets = 50
-    num_train_sets = 2
+    num_test_sets = 1
+    num_train_sets = 1
     vary_inputs = False
     datasets, train_test_dict = generate_train_test_split(alpha_star, beta_star, true_learning_rule, true_model_type, session_info, key, 
                                                           num_train_sets=num_train_sets, num_test_sets=num_test_sets, vary_inputs=vary_inputs)
@@ -1116,9 +1168,9 @@ def main():
     print(train_test_dict['train_pma_biases'])
     print(train_test_dict['train_ma_biases'])
     print('\n')
-    print(train_test_dict['test_pma_biases'])
-    print(train_test_dict['test_ma_biases'])
-    print('\n')
+    # print(train_test_dict['test_pma_biases'])
+    # print(train_test_dict['test_ma_biases'])
+    # print('\n')
     (train_inputs, train_outputs, train_rewards, train_w0) = datasets[0] 
 
     true_hyperparams = None
@@ -1178,9 +1230,9 @@ def main():
     l2_lambda = 0.  # 1.
     hyperparams_is_list = True 
     w0_inferred, min_nll, hyperparams_arr = run_randomized_optimization_procedure(batched_train_inputs, batched_train_outputs, batched_train_rewards, subkeys[5], learning_rule=test_learning_rule,
-                                                                                  num_seeds=10, max_iters=1_000, 
-                                                                                  tol=1e-6, method='optax',
-                                                                                  alpha_init_scale=0.1, beta_init_scale=1., w0_init_scale=0.1, epsilon=0.001,
+                                                                                  num_seeds=20, max_iters=500, 
+                                                                                  tol=1e-4, method='optax',
+                                                                                  alpha_init_scale=0.01, beta_init_scale=1., w0_init_scale=0.1, 
                                                                                   num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, batched=True, model_type=test_model_type)
     
     hyperparams = None 
@@ -1252,27 +1304,36 @@ def main():
     # plt.show()
 
 
-    # for k in range(num_test_sets):
+    for k in range(num_train_sets):
 
-    #     fig, axs = plt.subplots(3, 3, figsize=(18, 10), sharex=True, sharey=True)
+        fig, axs = plt.subplots(2, 3, figsize=(18, 10), sharex=True, sharey=True)
         
-    #     (curr_inputs, curr_outputs, curr_rewards, _) = datasets[num_train_sets + k]
-    #     true_nll, true_ws = run_deep_forward_weight_trajectory(true_hyperparams, curr_inputs, curr_outputs, curr_rewards, true_learning_rule, hyperparams_is_list=True)
-    #     print(f'True Data NLL: {true_nll}')
-    #     true_ws_arr = flatten_params(true_ws)
+        (curr_inputs, curr_outputs, curr_rewards, _) = datasets[k]
+        true_nll, true_ws = run_deep_forward_weight_trajectory(true_hyperparams, curr_inputs, curr_outputs, curr_rewards, true_learning_rule, hyperparams_is_list=True)
+        print(f'True Data NLL: {true_nll}')
+        true_ws_arr = flatten_params(true_ws)
 
-    #     inferred_nll, inferred_ws = run_deep_forward_weight_trajectory(hyperparams_arr, curr_inputs, curr_outputs, curr_rewards, true_learning_rule, hyperparams_is_list=True)
-    #     print(f'Inferred Test NLL: {inferred_nll}\n')
-    #     inferred_ws_arr = flatten_params(inferred_ws)
-    #     # realigned_inferred_ws_arr = realign_weight_trajectories(true_ws_arr, inferred_ws_arr)
+        inferred_nll, inferred_ws = run_deep_forward_weight_trajectory(hyperparams_arr, curr_inputs, curr_outputs, curr_rewards, true_learning_rule, hyperparams_is_list=True)
+        print(f'Inferred Test NLL: {inferred_nll}\n')
+        inferred_ws_arr = flatten_params(inferred_ws)
+        # realigned_inferred_ws_arr = realign_weight_trajectories(true_ws_arr, inferred_ws_arr)
 
-    #     i = 0
-    #     for ax in axs.ravel():
-    #         ax.plot(true_ws_arr[:, i], lw=2.3, color='green')
-    #         ax.plot(inferred_ws_arr[:, i], lw=3., color='black', linestyle='dashed')
-    #         i += 1
+        true_eff_trajectories = flatten_params(true_ws)
+        true_eff_trajectories = compute_two_layer_flattened_net_params(true_eff_trajectories)
+
+        inferred_eff_trajectories = flatten_params(inferred_ws)
+        inferred_eff_trajectories = compute_two_layer_flattened_net_params(inferred_eff_trajectories)
+
+        i = 0
+        for ax in axs.ravel():
+            ax.plot(true_eff_trajectories[:, i], lw=2.3, color='green', label='True Weights')
+            ax.plot(inferred_eff_trajectories[:, i], lw=3., color='black', linestyle='dashed', label='Inferred Weight')
+            i += 1
         
-    #     plt.show()
+        # axs[-1, -1].legend()
+        plt.show()
+    
+    print(1./0)
 
     
     # NOW SEE HOW BIASED THE INFERRED W0 IS IN THE WEIRD CASES!
@@ -1369,125 +1430,6 @@ def main():
 
     # plt.savefig(f'testing_alternative_rules/sample_true_{true_learning_rule}_inferring_{test_learning_rule}.png')
 
-
-
-def visualize_loss_landscape():
-    alpha_star = 0.01
-    beta_star = 12.0
-    alpha_scale = 0.001
-    custom_vmax = 10_000
-    num_inits = 100
-
-    key = jr.PRNGKey(264)    
-    _, key, skey, sskey, ssskey, sssskey = jr.split(key, 6)
-
-    num_sessions = 40
-
-    expert_threshold = 0.7
-    model_type = 'deep'
-    loss_type = 'gd_and_te'
-
-    num_grading_levels = 4
-    num_samples_per_grading = 30
-    num_zero_contrast = 10
-    num_samples_per_session = 2 * num_grading_levels * num_samples_per_grading + num_zero_contrast
-    num_trials = num_sessions * num_samples_per_session
-    z = 1.*num_zero_contrast / num_samples_per_session
-
-    inputs, targets, mask = generate_multisession_graded_data(num_sessions, num_grading_levels, num_samples_per_grading, num_zero_contrast, jr.PRNGKey(11))
-
-    init_params, (_, _) = random_init_params(skey, 3, 3, 2, default_single_loss=True)
-
-    params, losses, results_dict = fit_deep_net(init_params, num_trials, inputs, targets, None, beta_star, sskey, loss_type=loss_type,
-                                                end_condition=True, zero_contrast_mask=mask, num_sessions=num_sessions, num_grading_levels=num_grading_levels,
-                                                nonneg_constraint=False, gd_te_lrs=(alpha_star, alpha_star, 0., 0.))
-
-    outputs = results_dict['outputs']
-    rewards = results_dict['rewards']
-
-    eff_num_trials = results_dict['eff_num_trials']
-    rightward_statistics = results_dict['rightward_statistics']
-    partial_rightward_statistics = results_dict['partial_rightward_statistics']
-
-    model_agnostic_bias = calculate_model_agnostic_bias(rightward_statistics, z)
-    partial_agnostic_bias = calculate_model_agnostic_bias(partial_rightward_statistics, z)
-    print(f'\nModel-agnostic bias up to (full) {num_trials} iterations: {model_agnostic_bias}')
-    print(f'\nModel-agnostic bias up to {eff_num_trials} iterations: {partial_agnostic_bias}')
-
-    # create copies of the data sequence
-    w0 = jax.tree_util.tree_map(lambda x: jnp.array(x), init_params)
-    inputs = jnp.array(inputs)
-    outputs = jnp.array(outputs)
-    rewards = jnp.array(rewards)
-
-    num_pts = 51
-
-    alphas = np.linspace(0., 0.5, num=num_pts, endpoint=True)
-    alpha_spacing = alphas[1] - alphas[0]
-    alpha_star_idx = alpha_star / alpha_spacing
-
-    betas = np.linspace(0., 25., num=num_pts, endpoint=True)
-    beta_spacing = betas[1] - betas[0]
-    beta_star_idx = beta_star / beta_spacing 
-
-    nll_matrix = np.zeros((num_pts, num_pts))
-    for i in range(len(alphas)):
-        alpha = alphas[i]
-        for j in range(len(betas)):
-            beta = betas[j]
-
-            w0_copy = jax.tree_util.tree_map(lambda x: jnp.array(x), w0)
-
-            curr_hyperparams = {'alpha' : alpha / alpha_scale, 'beta' : beta}
-            nll, _ = run_deep_forward_weight_trajectory(curr_hyperparams, w0_copy, inputs, outputs, rewards, alpha_scale=alpha_scale)
-            nll_matrix[i, j] = nll
-    
-    (true_min_x, true_min_y) = np.unravel_index(np.argmin(nll_matrix, axis=None), nll_matrix.shape)
-    print(true_min_x, true_min_y)
-
-    print(nll_matrix)
-
-    estimated_hyperparams = np.zeros((2, num_inits))
-    key = jr.PRNGKey(947)
-    for k in range(num_inits):
-        _, key = jr.split(key, 2)
-        subkeys = jr.split(key, 4)
-
-        beta0 = 0.01 * jnp.abs(jr.normal(subkeys[1], (1,)).astype(jnp.float32))
-        alpha_gd0 = 0.01 * jnp.abs(jr.normal(subkeys[2], (1,))).astype(jnp.float32)
-        alpha_scale = 0.001
-        init_hyperparams = {'alpha' : alpha_gd0, 'beta' : beta0}
-
-        w0_copy = jax.tree_util.tree_map(lambda x: jnp.array(x), w0)
-
-        hyperparams_arr = sophisticated_fit_params(init_hyperparams, w0_copy, inputs, outputs, rewards)
-        hyperparams = {'alpha' : hyperparams_arr[0], 'beta' : hyperparams_arr[1]}
-
-        estimated_hyperparams[0, k] = hyperparams['alpha'] * alpha_scale
-        estimated_hyperparams[1, k] = hyperparams['beta']
-
-    print(estimated_hyperparams)
-
-    # Display the matrix as an image
-    plt.figure(figsize=(15, 15))
-    plt.imshow(nll_matrix, cmap='viridis', vmin=np.min(nll_matrix), vmax=np.max(nll_matrix))
-    plt.colorbar()
-    plt.scatter([beta_star_idx], [alpha_star_idx], color='red', s=200)
-    plt.scatter([true_min_y], [true_min_x], color='black', s=200)
-    plt.scatter(estimated_hyperparams[1]/beta_spacing, estimated_hyperparams[0]/alpha_spacing, color='blue', s=100)
-    plt.xticks(np.arange(num_pts)[::5], betas[::5])
-    plt.yticks(np.arange(num_pts)[::5], alphas[::5])
-    plt.show()
-
-    plt.figure(figsize=(15, 15))
-    plt.imshow(nll_matrix, cmap='viridis', vmin=np.min(nll_matrix), vmax=custom_vmax)
-    plt.colorbar()
-    plt.scatter([beta_star_idx], [alpha_star_idx], color='red', s=200)
-    plt.scatter([true_min_y], [true_min_x], color='black', s=200)
-    plt.scatter(estimated_hyperparams[1]/beta_spacing, estimated_hyperparams[0]/alpha_spacing, color='blue', s=100)
-    plt.xticks(np.arange(num_pts)[::5], betas[::5])
-    plt.yticks(np.arange(num_pts)[::5], alphas[::5])
-    plt.show()
 
 
 def plot_log_alpha_beta_distances(results_dict, trial, true_learning_rule, true_model_type,
@@ -1605,6 +1547,8 @@ def plot_test_nlls(results_dict, trial, true_learning_rule, true_model_type,
 
 
 if __name__=="__main__":
+    main()
+    print(1./0)
     # one_layer_approximation()
     # main()
     # visualize_loss_landscape()
@@ -1617,26 +1561,32 @@ if __name__=="__main__":
     
 
     
-    true_learning_rule = 'gd'
+    true_learning_rule = 'te'
     true_model_type = 'one-layer'
-    num_trials = 1
-    key = jr.PRNGKey(101)
+    num_trials = 5
+    key = jr.PRNGKey(92)
     _, key = jr.split(key, 2)
     
-    results_dict = run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type, num_trials, key, num_train_per_trial=2, num_test_per_trial=25, session_info=(40, 4, 30, 10), num_opt_seeds=15, fixed_alpha=0.003, fixed_beta=10., save_data=True, vary_inputs=False, name=f'{true_model_type}_{true_learning_rule}_exploration_ntrials{num_trials}')
+    results_dict = run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type, num_trials, key, num_train_per_trial=9, 
+                                                            num_test_per_trial=9, session_info=(40, 4, 30, 10), num_opt_seeds=15, 
+                                                            fixed_alpha=0.003, fixed_beta=10., save_data=True, vary_inputs=False, 
+                                                            name=f'stratified_batched_inference/{true_model_type}_{true_learning_rule}/ntrials{num_trials}',
+                                                            true_w0=None, do_bias_stratified_split=True)
 
-    test_pma_biases = results_dict['test_pma_biases']
-    print(test_pma_biases)
-    print(results_dict)
+    filepath = f'stratified_batched_inference/{true_model_type}_{true_learning_rule}'
+    # with open(f'{filepath}/ntrials5_simulated_data_inference_true_rule_gd_numtrials_5_numtrainitems9_numtestitems9_numoptseeds15.pkl', 'rb') as file:
+    #     results_dict = pkl.load(file)
 
+    # test_pma_biases = results_dict['test_pma_biases']
+    # print(test_pma_biases)
+    # print(results_dict)
 
-    filepath = 'onelayer_debugging_exploration'
+    for i in range(num_trials):
+        plot_log_alpha_beta_distances(results_dict, trial=i, true_learning_rule=true_learning_rule, true_model_type=true_model_type, savefig=True, filepath=filepath)
 
-    plot_log_alpha_beta_distances(results_dict, trial=0, true_learning_rule=true_learning_rule, true_model_type=true_model_type, savefig=True, filepath=filepath)
+        plot_train_nlls(results_dict, trial=i, true_learning_rule=true_learning_rule, true_model_type=true_model_type, savefig=True, filepath=filepath)
 
-    plot_train_nlls(results_dict, trial=0, true_learning_rule=true_learning_rule, true_model_type=true_model_type, savefig=True, filepath=filepath)
-
-    plot_test_nlls(results_dict, trial=0, true_learning_rule=true_learning_rule, true_model_type=true_model_type, savefig=True, filepath=filepath)
+        plot_test_nlls(results_dict, trial=i, true_learning_rule=true_learning_rule, true_model_type=true_model_type, savefig=True, filepath=filepath)
 
     
 

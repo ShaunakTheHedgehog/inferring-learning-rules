@@ -16,15 +16,16 @@ def shallow_net(params, inputs):
     out = W @ inputs    # (3, )
     return out
 
-def shallow_net_params(key, const_mean=0., const_scale=0.01, stim_mean=0.05, stim_scale=0.2,
-                       beta_mean=9., beta_scale=1., lr_mean=0.003, lr_scale=0.001):
+def shallow_net_params(key, const_mean=0., const_scale=0.1, stim_mean=0., stim_scale=0.1,
+                       beta_mean=9., beta_scale=1., lr_mean=0.003, lr_scale=0.001, nonneg=False):
     skeys = jr.split(key, 6)
 
     c0 = jnp.abs(jr.normal(skeys[1], (1,))) * const_scale + const_mean
     s0 = jnp.abs(jr.normal(skeys[2], (1,))) * stim_scale + stim_mean
 
     W = jnp.array([[c0, s0, s0], [c0, s0, s0]]).reshape(2, 3) + 1e-4 * jr.normal(skeys[3], (2, 3))
-    W = jnp.abs(W)
+    if nonneg:
+        W = jnp.abs(W)
 
     beta = jnp.abs(jr.normal(skeys[4], (1,)) * beta_scale + beta_mean)
     beta = beta[0]
@@ -210,6 +211,7 @@ def fit_shallow_model(params, num_trials, inputs, targets, lr, beta, key, loss_t
     biases = []
     stim_DA_biases = []
     outputs = []
+    q_vals = []
 
     rightward_statistics = np.zeros((2, 3))      # an array of how often right was chosen in each of the three input settings (right / graded right, zero contrast, left / graded left)
     partial_rightward_statistics = np.zeros_like(rightward_statistics)
@@ -223,6 +225,7 @@ def fit_shallow_model(params, num_trials, inputs, targets, lr, beta, key, loss_t
         rew, choice_idx = _reward(params, input, target, subkey)
         rewards.append(rew)
         outputs.append(choice_idx)
+        q_vals.append(shallow_net(params, input))
 
         # at the end of each session, we can calculate accuracy and determine whether the model has reached "expert" status
         if (end_condition and n % num_samples_per_session == num_samples_per_session-1):
@@ -278,7 +281,7 @@ def fit_shallow_model(params, num_trials, inputs, targets, lr, beta, key, loss_t
     l_slopes = psychometrics[:, num_grading_levels] - psychometrics[:, 0]    # zero contrast - full left
     slope_diffs = r_slopes - l_slopes
 
-    results_dict = {'params' : params, 'losses' : losses, 'rewards' : rewards, 'outputs' : outputs,
+    results_dict = {'params' : params, 'losses' : losses, 'rewards' : rewards, 'outputs' : outputs, 'q_vals' : q_vals,
                     'outcome_DA_signals' : outcome_DA_signals, 'stim_DA_signals' : stim_DA_signals,
                     'biases' : biases, 'stim_DA_biases' : stim_DA_biases,
                     'psychometrics' : psychometrics, 'slope_diffs' : slope_diffs, 'rightward_statistics' : rightward_statistics,

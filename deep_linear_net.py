@@ -185,13 +185,18 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
     assert inputs.shape[0] == targets.shape[0]
     assert inputs.shape[0] == num_trials
     assert inputs.shape[1] == 3
-    num_samples_per_session = None
-    session_mask = None
-    if num_sessions is not None:
-        assert num_trials % num_sessions == 0
-        assert zero_contrast_mask is not None
-        num_samples_per_session = num_trials // num_sessions
-        session_mask = zero_contrast_mask[:num_samples_per_session].astype(bool)
+    # num_samples_per_session = None
+    # session_mask = None
+    # if num_sessions is not None:
+    #     assert num_trials % num_sessions == 0
+    #     assert zero_contrast_mask is not None
+    #     num_samples_per_session = num_trials // num_sessions
+    #     session_mask = zero_contrast_mask[:num_samples_per_session].astype(bool)
+    assert num_trials % num_sessions == 0
+    num_samples_per_session = num_trials // num_sessions
+    threshold_acc_reached_idx = None
+    eff_num_trials = num_trials
+    
     threshold_acc_reached_idx = None
     eff_num_trials = num_trials
 
@@ -398,6 +403,7 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
     losses = []
     rewards = []
     outputs = []
+    q_vals = []
     outcome_DA_signals = []
     stim_DA_signals = []
     biases = []
@@ -422,12 +428,18 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
         rew, choice_idx = _reward(params, input, target, subkey)
         rewards.append(rew.item())
         outputs.append(choice_idx)
+        q_vals.append(cortico_striatal_net(params, input)[0])
         # avg_right_choices += (1 - choice_idx)
 
         # at the end of each session, we can calculate accuracy and determine whether the model has reached "expert" status
         if (end_condition and n % num_samples_per_session == num_samples_per_session-1):
+            # curr_rewards = jnp.asarray(rewards[-num_samples_per_session:])      # access all the rewards from the current session
+            # nonmasked_rewards = curr_rewards[session_mask]     # access only rewards from non-zero contrast trials during the session
+            curr_mask = zero_contrast_mask[n-num_samples_per_session+1:n+1].astype(bool)
             curr_rewards = jnp.asarray(rewards[-num_samples_per_session:])      # access all the rewards from the current session
-            nonmasked_rewards = curr_rewards[session_mask]     # access only rewards from non-zero contrast trials during the session
+
+            nonmasked_rewards = curr_rewards[curr_mask]                         # access only rewards from non-zero contrast trials during the session
+
 
             acc = jnp.mean(nonmasked_rewards).item()
 
@@ -483,7 +495,7 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
     l_slopes = psychometrics[:, num_grading_levels] - psychometrics[:, 0]    # zero contrast - full left
     slope_diffs = r_slopes - l_slopes
 
-    results_dict = {'params' : params, 'losses' : losses, 'rewards' : rewards, 'outputs' : outputs, 
+    results_dict = {'params' : params, 'losses' : losses, 'rewards' : rewards, 'outputs' : outputs, 'q_vals' : q_vals,
                     'outcome_DA_signals' : outcome_DA_signals, 'stim_DA_signals' : stim_DA_signals,
                     'biases' : biases, 'stim_DA_biases' : stim_DA_biases,
                     'psychometrics' : psychometrics, 'slope_diffs' : slope_diffs, 'rightward_statistics' : rightward_statistics,
