@@ -8,6 +8,8 @@ import optax
 import numpy as np
 import pickle as pkl
 
+from utils import generate_full_input_set
+
 
 def are_valid_learning_rates(x1, x2, x3, x4, num_blocks):
     '''
@@ -32,9 +34,9 @@ def are_valid_learning_rates(x1, x2, x3, x4, num_blocks):
     return False
 
 
-def cortico_striatal_net(params, inputs):
+def cortico_striatal_net(params, inputs, nln=jax.nn.identity):
     """
-    Simple shallow linear network model from Liebana Garcia et al. (2023)
+    Simple deep linear network model from Liebana Garcia et al. (2023)
 
     Arguments:
     - params:   dictionary storing the network weights
@@ -44,7 +46,8 @@ def cortico_striatal_net(params, inputs):
     W1_diag = params["W1_diag"]     # (3,)
     W2 = params["W2"]               # (2, 3)
 
-    hidden = W1_diag * inputs
+    pre_hidden = W1_diag * inputs
+    hidden = nln(pre_hidden)
     out = W2 @ hidden
 
     return out, hidden
@@ -58,7 +61,7 @@ def manual_init_params(W1_diag, W2):
 
 def random_init_params(key, input_dim, hidden_dim, output_dim, default_tutor_executor=False, default_single_loss=False,
                         W1_stim_range=0.03, W1_const_range=0.1, W2_const_range=0.03, W2_stim_range=0.03,
-                       W1_stim_mean=0.03, W1_const_mean=1., W2_stim_mean=0.03, W2_const_mean=0.03):
+                       W1_stim_mean=0.03, W1_const_mean=1., W2_stim_mean=0.03, W2_const_mean=0.03, gd_with_nln=False):
     """Generate random shallow linear network parameters"""
     assert not (default_tutor_executor and default_single_loss)
 
@@ -143,7 +146,10 @@ def random_init_params(key, input_dim, hidden_dim, output_dim, default_tutor_exe
         key_6 = skeys[6]
         while lr < 0:
             _, key_6 = jr.split(key_6)
-            lr = jr.normal(key_6, (1,)) * 0.001 + 0.0015
+            if gd_with_nln:
+                lr = jr.normal(key_6, (1,)) * 0.002 + 0.02
+            else:
+                lr = jr.normal(key_6, (1,)) * 0.001 + 0.0015
         lr = lr[0]
 
     else:
@@ -163,7 +169,7 @@ def random_init_params(key, input_dim, hidden_dim, output_dim, default_tutor_exe
     return {"W1_diag" : W1_diag, "W2" : W2}, (beta, lr)
 
 
-def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='tutor_executor', nonneg_constraint=True,
+def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, nln=jax.nn.identity, loss_type='tutor_executor', nonneg_constraint=True,
         end_condition=True, zero_contrast_mask=None, num_sessions=None, num_grading_levels=2, gd_te_lrs=None, num_lr_blocks=1):
     '''
     Train deep linear network on one of two RL-based loss functions.
@@ -236,7 +242,7 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
 
     @jit
     def _reward(params, x, target, key):
-        out, _ = cortico_striatal_net(params, x)
+        out, _ = cortico_striatal_net(params, x, nln)
         p_R, p_L, choice_idx = _softmax_policy(out, key)
         is_not_zero_contrast = jnp.minimum(2*num_grading_levels*jnp.sum(x[1:]), 1.)        # get 0 if zero_contrast, 1 if not
 
@@ -250,11 +256,11 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
         W1_diag = params["W1_diag"]     # (3,)
         W2 = params["W2"]               # (2, 3)
 
-        out, hidden = cortico_striatal_net(params, x)
+        out, hidden = cortico_striatal_net(params, x, nln=nln)
         p_R, p_L, choice_idx = _softmax_policy(out, key)
 
-        Q_R_stim = jnp.dot(W2[0, 1:], W1_diag[1:] * x[1:])
-        Q_L_stim = jnp.dot(W2[1, 1:], W1_diag[1:] * x[1:])
+        Q_R_stim = jnp.dot(W2[0, 1:], nln(W1_diag[1:] * x[1:]))
+        Q_L_stim = jnp.dot(W2[1, 1:], nln(W1_diag[1:] * x[1:]))
         Q_stim = jnp.where((choice_idx == 0), Q_R_stim, Q_L_stim)
 
         p_R_stim, p_L_stim, _ = _softmax_policy([Q_R_stim, Q_L_stim], jr.PRNGKey(1))
@@ -265,7 +271,7 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
 
     @jit
     def _single_loss_gd(params, x, rew, key):
-        out, hidden = cortico_striatal_net(params, x)
+        out, hidden = cortico_striatal_net(params, x, nln)
         p_R, p_L, choice_idx = _softmax_policy(out, key)
         Q_ch = out[choice_idx]
         loss = 0.5 * (rew - Q_ch)**2
@@ -276,9 +282,9 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
         W1_diag = params["W1_diag"]     # (3,)
         W2 = params["W2"]               # (2, 3)
 
-        out, hidden = cortico_striatal_net(params, x)
+        out, hidden = cortico_striatal_net(params, x, nln=nln)
         p_R, p_L, choice_idx = _softmax_policy(out, key)
-        Q_stim = jnp.dot(W2[choice_idx, 1:], W1_diag[1:] * x[1:])
+        Q_stim = jnp.dot(W2[choice_idx, 1:], nln(W1_diag[1:] * x[1:]))
         loss = 0.5 * (rew - Q_stim)**2
         return loss
 
@@ -287,9 +293,9 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
         W1_diag = params["W1_diag"]     # (3,)
         W2 = params["W2"]               # (2, 3)
 
-        out, hidden = cortico_striatal_net(params, x)
+        out, hidden = cortico_striatal_net(params, x, nln=nln)
         p_R, p_L, choice_idx = _softmax_policy(out, key)
-        Q_const = W2[choice_idx, 0] * W1_diag[0] * x[0]
+        Q_const = W2[choice_idx, 0] * nln(W1_diag[0] * x[0])
         loss = 0.5 * (rew - Q_const)**2
         return loss
 
@@ -354,28 +360,19 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
     @jit
     def _bias(params):
         x = jnp.array([1., 0., 0.])
-        out, hidden = cortico_striatal_net(params, x)
+        out, hidden = cortico_striatal_net(params, x, nln)
         p_R, _, _ = _softmax_policy(out, jr.PRNGKey(1))
         return p_R - 0.5
 
     @jit
     def _psychometric_data(params): # UPDATE THIS
         # inputs, going from left to right
-        grading = 1./num_grading_levels
-        gradings = jnp.arange(0, 1. + grading/2, grading)
-        R_column = jnp.concatenate([jnp.zeros(num_grading_levels), gradings])
-        L_column = jnp.flip(R_column)
-        const_column = jnp.ones(2 * num_grading_levels + 1)
-        xs = jnp.array([const_column, R_column, L_column]).T
-        # xs = None
-        # if not add_extra_gradings:
-        #     xs = jnp.array([[1., 0., 1.], [1., 0., 0.5],[1., 0., 0.], [1., 0.5, 0.], [1., 1., 0.]])
-        # else:
-        #     xs = jnp.array([[1., 0., 1.], [1., 0., 0.75], [1., 0., 0.5], [1., 0., 0.25], [1., 0., 0.], [1., 0.25, 0], [1., 0.5, 0.], [1., 0.75, 0.], [1., 1., 0.]])
+        xs = generate_full_input_set(num_grading_levels)
+       
         data = []
 
         for x in xs:
-            out, hidden = cortico_striatal_net(params, x)
+            out, hidden = cortico_striatal_net(params, x, nln)
             p_R, _, _ = _softmax_policy(out, jr.PRNGKey(1))
             data.append(p_R)
 
@@ -387,14 +384,14 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
         W2 = params["W2"]               # (2, 3)
 
         right_x = jnp.array([1., 1., 0.])
-        Q_R_stim = jnp.dot(W2[0, 1:], W1_diag[1:] * right_x[1:])
-        Q_L_stim = jnp.dot(W2[1, 1:], W1_diag[1:] * right_x[1:])
+        Q_R_stim = jnp.dot(W2[0, 1:], nln(W1_diag[1:] * right_x[1:]))
+        Q_L_stim = jnp.dot(W2[1, 1:], nln(W1_diag[1:] * right_x[1:]))
         p_R_stim, p_L_stim, _ = _softmax_policy([Q_R_stim, Q_L_stim], jr.PRNGKey(1))
         right_stim_DA = Q_R_stim * p_R_stim + Q_L_stim * p_L_stim
 
         left_x = jnp.array([1., 0., 1.])
-        Q_R_stim = jnp.dot(W2[0, 1:], W1_diag[1:] * left_x[1:])
-        Q_L_stim = jnp.dot(W2[1, 1:], W1_diag[1:] * left_x[1:])
+        Q_R_stim = jnp.dot(W2[0, 1:], nln(W1_diag[1:] * left_x[1:]))
+        Q_L_stim = jnp.dot(W2[1, 1:], nln(W1_diag[1:] * left_x[1:]))
         p_R_stim, p_L_stim, _ = _softmax_policy([Q_R_stim, Q_L_stim], jr.PRNGKey(1))
         left_stim_DA = Q_R_stim * p_R_stim + Q_L_stim * p_L_stim
 
@@ -428,7 +425,7 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
         rew, choice_idx = _reward(params, input, target, subkey)
         rewards.append(rew.item())
         outputs.append(choice_idx)
-        q_vals.append(cortico_striatal_net(params, input)[0])
+        q_vals.append(cortico_striatal_net(params, input, nln)[0])
         # avg_right_choices += (1 - choice_idx)
 
         # at the end of each session, we can calculate accuracy and determine whether the model has reached "expert" status
@@ -478,16 +475,15 @@ def fit_deep_net(params, num_trials, inputs, targets, lr, beta, key, loss_type='
         if (n+1) % 250 == 0:
             print(f'step {n+1}, loss: {loss_value.item()}')
 
-        if (threshold_acc_reached_idx is not None and n == threshold_acc_reached_idx + 1500):
+        if (threshold_acc_reached_idx is not None and n == jnp.minimum(threshold_acc_reached_idx + 1500, num_trials - 1)):
             partial_rightward_statistics = rightward_statistics.copy()
-            # break
 
         if threshold_acc_reached_idx is None and n == num_trials - 1:
             partial_rightward_statistics = rightward_statistics.copy()
 
 
     if threshold_acc_reached_idx is not None:
-        eff_num_trials = threshold_acc_reached_idx + 1500 + 1
+        eff_num_trials = jnp.minimum(threshold_acc_reached_idx + 1500 + 1, num_trials)
         # psychometrics = psychometrics[:num_trials]
 
     # avg_right_choices /= num_trials

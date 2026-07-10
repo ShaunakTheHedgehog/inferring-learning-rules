@@ -491,7 +491,7 @@ def PCA_exploration():
 def main():
     true_model_type = 'two-layer'
     test_model_type = 'two-layer'
-    key = jr.PRNGKey(55)
+    key = jr.PRNGKey(34)
     _, key = jr.split(key, 2)
     skeys = jr.split(key, 6)
 
@@ -514,8 +514,8 @@ def main():
 
     beta = 10.
     W1_lr = 0.003
-    W2_const_lr = 0.003
-    W2_stim_lr = 0.003
+    W2_const_lr = 0.002
+    W2_stim_lr = 0.006
 
     lrs = jnp.array([W1_lr, W2_const_lr, W2_stim_lr])
 
@@ -535,8 +535,8 @@ def main():
 
     # one_layer_lrs = jnp.array([W2_const_lr, W2_stim_lr])
 
-    num_train_sets = 1
-    num_test_sets = 1
+    num_train_sets = 3
+    num_test_sets = 3
     datasets, train_test_dict = generate_metric_GD_train_test_split(lrs, beta, true_model_type, session_info, skeys[3], num_train_sets=num_train_sets, num_test_sets=num_test_sets,
                                                                     vary_inputs=False, true_w0=None, do_bias_stratified_split=False, nonneg_init_weights=True)
     
@@ -601,34 +601,33 @@ def main():
     # true_nll = compute_nll(true_hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, model_type=true_model_type)
     print(f'True Batch-averaged Data NLL: {true_nll}')
 
-    num_alpha_blocks = 1
-    l2_lambda = 0.  # 1.
-    hyperparams_is_list = True 
-    w0_inferred, min_nll, hyperparams_arr = run_randomized_optimization_procedure(batched_train_inputs, batched_train_outputs, batched_train_rewards, skeys[5], learning_rule='gd',
-                                                                                  num_seeds=15, max_iters=500, 
-                                                                                  tol=1e-4, method='optax',
-                                                                                  alpha_init_scale=0.01, beta_init_scale=1., w0_init_scale=0.1, 
-                                                                                  num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, batched=True, model_type=test_model_type)
+    # num_alpha_blocks = 1
+    # l2_lambda = 0.  # 1.
+    # hyperparams_is_list = True 
+    # w0_inferred, min_nll, hyperparams_arr = run_randomized_optimization_procedure(batched_train_inputs, batched_train_outputs, batched_train_rewards, skeys[5], learning_rule='gd',
+    #                                                                               num_seeds=15, max_iters=500, 
+    #                                                                               tol=1e-4, method='optax',
+    #                                                                               alpha_init_scale=0.01, beta_init_scale=1., w0_init_scale=0.1, 
+    #                                                                               num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, batched=True, model_type=test_model_type)
     
-    alpha_inits_guess = jnp.repeat(jnp.exp(hyperparams_arr[0]), 3)
-    beta_init_guess = jnp.exp(hyperparams_arr[1])
-    w0_init_guess = w0_inferred
-    print(alpha_inits_guess, beta_init_guess, w0_init_guess)
+    # alpha_inits_guess = jnp.repeat(jnp.exp(hyperparams_arr[0]), 3)
+    # beta_init_guess = jnp.exp(hyperparams_arr[1])
+    # w0_init_guess = w0_inferred
 
-    w0_inferred, min_nll, inferred_hyperparams_arr, (all_hyperparams, all_nlls) = run_randomized_metric_GD_inference_procedure(batched_train_inputs, batched_train_outputs, batched_train_rewards, skeys[4], num_seeds=50,
-                                                                                           max_iters=500, tol=1e-4, alpha_init_scale=0.01, beta_init_scale=1., w0_init_scale=0.1,
-                                                                                           model_type=test_model_type, batched=True,
-                                                                                           alpha_inits_guess=alpha_inits_guess, beta_init_guess=beta_init_guess, w0_init_guess=w0_init_guess, noise_level=0.05)
+    w0_inferred, min_nll, inferred_hyperparams_arr, (all_hyperparams, all_nlls) = run_randomized_metric_GD_inference_procedure(batched_train_inputs, batched_train_outputs, batched_train_rewards, skeys[4], num_seeds=15,
+                                                                                           max_iters=500, tol=1e-4, alpha_init_scale=0.01, beta_init_scale=10., w0_init_scale=0.1,
+                                                                                           model_type=test_model_type, batched=True)
+                                                                                           # alpha_inits_guess=alpha_inits_guess, beta_init_guess=beta_init_guess, w0_init_guess=w0_init_guess, noise_level=0.05)
     
-    print(len(all_nlls))
-    n_samples = all_nlls.shape[0]
-    print(all_hyperparams.shape)
-    print(all_nlls.shape)
-    np.save(f'metric_GD_PCA_exploration/metric_GD_inferred_hyperparams_nsamples{n_samples}_groundtruthlrs_{W1_lr}_{W2_const_lr}_{W2_stim_lr}_beta{beta}.npy', all_hyperparams)
-    np.save(f'metric_GD_PCA_exploration/metric_GD_inferred_nlls_nsamples{n_samples}_groundtruthlrs_{W1_lr}_{W2_const_lr}_{W2_stim_lr}_beta{beta}.npy', all_nlls)
+    # print(len(all_nlls))
+    # n_samples = all_nlls.shape[0]
+    # print(all_hyperparams.shape)
+    # print(all_nlls.shape)
+    # np.save(f'metric_GD_PCA_exploration/metric_GD_inferred_hyperparams_nsamples{n_samples}_groundtruthlrs_{W1_lr}_{W2_const_lr}_{W2_stim_lr}_beta{beta}.npy', all_hyperparams)
+    # np.save(f'metric_GD_PCA_exploration/metric_GD_inferred_nlls_nsamples{n_samples}_groundtruthlrs_{W1_lr}_{W2_const_lr}_{W2_stim_lr}_beta{beta}.npy', all_nlls)
 
-    epsilon = 2.0
-    filtered_hyperparams = PCA_visualization(all_hyperparams, all_nlls, NLL_threshold=min_nll+epsilon)
+    # epsilon = 2.0
+    # filtered_hyperparams = PCA_visualization(all_hyperparams, all_nlls, NLL_threshold=min_nll+epsilon)
     
     print(f'Minimum NLL obtained on training data: {min_nll}')
     

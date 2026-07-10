@@ -8,7 +8,7 @@ import optax
 import numpy as np
 import pickle as pkl
 
-# TODO: re-run the shallow net sweep
+from utils import generate_full_input_set
 
 
 def shallow_net(params, inputs):
@@ -166,17 +166,7 @@ def fit_shallow_model(params, num_trials, inputs, targets, lr, beta, key, loss_t
     @jit
     def _psychometric_data(params): # UPDATE THIS
         # inputs, going from left to right
-        grading = 1./num_grading_levels
-        gradings = jnp.arange(0, 1. + grading/2, grading)
-        R_column = jnp.concatenate([jnp.zeros(num_grading_levels), gradings])
-        L_column = jnp.flip(R_column)
-        const_column = jnp.ones(2 * num_grading_levels + 1)
-        xs = jnp.array([const_column, R_column, L_column]).T
-        # xs = None
-        # if not add_extra_gradings:
-        #     xs = jnp.array([[1., 0., 1.], [1., 0., 0.5],[1., 0., 0.], [1., 0.5, 0.], [1., 1., 0.]])
-        # else:
-        #     xs = jnp.array([[1., 0., 1.], [1., 0., 0.75], [1., 0., 0.5], [1., 0., 0.25], [1., 0., 0.], [1., 0.25, 0], [1., 0.5, 0.], [1., 0.75, 0.], [1., 1., 0.]])
+        xs = generate_full_input_set(num_grading_levels)
         data = []
 
         for x in xs:

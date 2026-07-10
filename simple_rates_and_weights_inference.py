@@ -123,7 +123,7 @@ def run_onelayer_forward_weight_trajectory(hyperparams, inputs, outputs, rewards
 
 
 
-def run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, learning_rule, hyperparams_is_list):
+def run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, learning_rule, hyperparams_is_list, nln):
     """
     Arguments:
     - hyperparams (alphas, beta, w0)
@@ -181,7 +181,7 @@ def run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, le
     # Loss: squared error loss
     @jit
     def _squared_error_loss_fn(w, x, y_choice, rew):
-        out, _ = cortico_striatal_net(w, x)
+        out, _ = cortico_striatal_net(w, x, nln)
         Q_y = out[y_choice]
         return 0.5 * (Q_y - rew)**2
     
@@ -190,7 +190,7 @@ def run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, le
         W1_diag = w["W1_diag"]     # (3,)
         W2 = w["W2"]               # (2, 3)
 
-        Q_stim = jnp.dot(W2[y_choice, 1:], W1_diag[1:] * x[1:])
+        Q_stim = jnp.dot(W2[y_choice, 1:], nln(W1_diag[1:] * x[1:]))
         loss = 0.5 * (rew - Q_stim)**2
         return loss
 
@@ -199,7 +199,7 @@ def run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, le
         W1_diag = w["W1_diag"]     # (3,)
         W2 = w["W2"]               # (2, 3)
 
-        Q_const = W2[y_choice, 0] * W1_diag[0] * x[0]
+        Q_const = W2[y_choice, 0] * nln(W1_diag[0] * x[0])
         loss = 0.5 * (rew - Q_const)**2
         return loss
     
@@ -227,7 +227,7 @@ def run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, le
             w_new = _apply_updates(w_new, gd_grads, lr_te_W1)
 
         # for the current weights compute the log-likelihood of the data given the hyperparams (alpha, beta)
-        out, _ = cortico_striatal_net(w, x)
+        out, _ = cortico_striatal_net(w, x, nln)
         ll = _log_likelihood(out, y)
 
         return w_new, (ll, w_new)
@@ -241,7 +241,7 @@ def run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, le
     return total_nll, ws 
 
 # following functions operate on batches of (inputs, outputs, rewards), and return a batched array of total nlls and batched pytree of weight trajectories
-batched_run_deep_forward_weight_trajectory = vmap(run_deep_forward_weight_trajectory, in_axes=(None, 0, 0, 0, None, None))
+batched_run_deep_forward_weight_trajectory = vmap(run_deep_forward_weight_trajectory, in_axes=(None, 0, 0, 0, None, None, None))
 batched_run_onelayer_forward_weight_trajectory = vmap(run_onelayer_forward_weight_trajectory, in_axes=(None, 0, 0, 0, None, None))
 
 
@@ -377,7 +377,7 @@ batched_run_blocked_deep_forward_weight_trajectory = vmap(run_deep_forward_weigh
 
 
 
-def compute_nll(hyperparams, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule='gd', 
+def compute_nll(hyperparams, inputs, outputs, rewards, hyperparams_is_list=True, nln=jax.nn.identity, learning_rule='gd', 
                 num_alpha_blocks=1, l2_lambda=1e-3, model_type='two-layer'):
     assert learning_rule in ['gd', 'te']
     assert model_type in ['two-layer', 'one-layer']
@@ -385,7 +385,7 @@ def compute_nll(hyperparams, inputs, outputs, rewards, hyperparams_is_list=True,
     total_nll = None
     if model_type == 'two-layer':
         if num_alpha_blocks == 1:
-            total_nll, _ = run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, learning_rule, hyperparams_is_list)
+            total_nll, _ = run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, learning_rule, hyperparams_is_list, nln)
             # w0 = hyperparams[2:]
             # total_nll + 1e-4 * jnp.sum(w0**2)
         else:
@@ -405,14 +405,14 @@ def compute_nll(hyperparams, inputs, outputs, rewards, hyperparams_is_list=True,
     return total_nll
 
 
-def compute_batched_nll(hyperparams, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule='gd', 
+def compute_batched_nll(hyperparams, inputs, outputs, rewards, hyperparams_is_list=True, nln=jax.nn.identity, learning_rule='gd', 
                         model_type='two-layer'):
     assert learning_rule in ['gd', 'te']
     assert model_type in ['two-layer', 'one-layer']
 
     all_nlls = None
     if model_type == 'two-layer':
-        all_nlls, _ = batched_run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, learning_rule, hyperparams_is_list)
+        all_nlls, _ = batched_run_deep_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, learning_rule, hyperparams_is_list, nln)
     else:
         all_nlls, _ = batched_run_onelayer_forward_weight_trajectory(hyperparams, inputs, outputs, rewards, learning_rule, hyperparams_is_list)
 
@@ -421,24 +421,24 @@ def compute_batched_nll(hyperparams, inputs, outputs, rewards, hyperparams_is_li
     return batch_nll
 
 
-def compute_hessian(hyperparams_arr, inputs, outputs, rewards, learning_rule='gd', num_alpha_blocks=1, l2_lambda=1e-3, model_type='two-layer', batched=False):
+def compute_hessian(hyperparams_arr, inputs, outputs, rewards, nln=jax.nn.identity, learning_rule='gd', num_alpha_blocks=1, l2_lambda=1e-3, model_type='two-layer', batched=False):
     assert learning_rule in ['gd', 'te']
     assert model_type in ['two-layer', 'one-layer']
     hess_fn = None 
     hessian = None 
     if batched:
         hess_fn = jax.hessian(compute_batched_nll)
-        hessian = hess_fn(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule, model_type=model_type)
+        hessian = hess_fn(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule, model_type=model_type)
     else:
         hess_fn = jax.hessian(compute_nll)
-        hessian = hess_fn(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule, num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type)
+        hessian = hess_fn(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule, num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type)
     
     # hessian = jacfwd(jacrev(compute_nll))(jnp_hyperparams, inputs, outputs, rewards, alpha_scale=alpha_scale, hyperparams_is_list=True)
     eigvals = jnp.linalg.eigvalsh(hessian)
     return hessian, eigvals 
 
 
-def optax_fit_params(init_hyperparams, inputs, outputs, rewards, learning_rule='gd', 
+def optax_fit_params(init_hyperparams, inputs, outputs, rewards, learning_rule='gd', nln=jax.nn.identity,
                      max_iters=500, tol=1e-6, num_alpha_blocks=1, l2_lambda=1e-3, model_type='two-layer', batched=False):
     assert learning_rule in ['gd', 'te']
     assert model_type in ['two-layer', 'one-layer']
@@ -446,11 +446,11 @@ def optax_fit_params(init_hyperparams, inputs, outputs, rewards, learning_rule='
     jnp_hyperparams = jnp.concatenate([init_hyperparams[key].reshape(-1) for key in init_hyperparams.keys()])
     meta_loss_fn = None 
     if batched:
-        meta_loss_fn = partial(compute_batched_nll, inputs=inputs, outputs=outputs, rewards=rewards, hyperparams_is_list=True, learning_rule=learning_rule, model_type=model_type)
+        meta_loss_fn = partial(compute_batched_nll, inputs=inputs, outputs=outputs, rewards=rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule, model_type=model_type)
     else:
-        meta_loss_fn = partial(compute_nll, inputs=inputs, outputs=outputs, rewards=rewards, hyperparams_is_list=True, learning_rule=learning_rule, 
+        meta_loss_fn = partial(compute_nll, inputs=inputs, outputs=outputs, rewards=rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule, 
                            num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type)
-    opt = optax.lbfgs(memory_size=100) #(memory_size=50)
+    opt = optax.lbfgs(memory_size=50) #(memory_size=50)
     value_and_grad_fun = optax.value_and_grad_from_state(meta_loss_fn)
 
     def step(carry):
@@ -505,25 +505,24 @@ def sophisticated_fit_params(init_hyperparams, inputs, outputs, rewards, learnin
 
 
 
-def epsilon_ball_test(hyperparams_arr, inputs, outputs, rewards, key, learning_rule='gd', num_samples=25, epsilon=0.01):
+def epsilon_ball_test(hyperparams_arr, inputs, outputs, rewards, key, nln=jax.nn.identity, learning_rule='gd', num_samples=25, epsilon=0.01):
     assert learning_rule in ['gd', 'te']
     N = len(hyperparams_arr)
-    curr_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule)
+    curr_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule)
     nearby_nlls = []
     for _ in range(num_samples):
         _, key = jr.split(key, 2)
         perturbed_hyperparams = hyperparams_arr + jr.normal(key, (N,)) * epsilon 
-        inferred_nll, _ = run_deep_forward_weight_trajectory(perturbed_hyperparams, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule)
+        inferred_nll, _ = run_deep_forward_weight_trajectory(perturbed_hyperparams, inputs, outputs, rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule)
         nearby_nlls.append(inferred_nll.item())
     return curr_nll, nearby_nlls
 
 
-def run_randomized_optimization_procedure(inputs, outputs, rewards, key, learning_rule='gd',
-                                          num_seeds=25, max_iters=500, method='optax', tol=1e-6,
+def run_randomized_optimization_procedure(inputs, outputs, rewards, key, nln=jax.nn.identity, learning_rule='gd',
+                                          num_seeds=25, max_iters=500, tol=1e-4,
                                           alpha_init_scale=1e-1, beta_init_scale=1e0, w0_init_scale=1e-1,
-                                          epsilon=0.001, num_alpha_blocks=1, l2_lambda=1e-3, model_type='two-layer', batched=False):
+                                          num_alpha_blocks=1, l2_lambda=1e-3, model_type='two-layer', batched=False):
     assert learning_rule in ['gd', 'te']
-    assert method in ['jaxopt', 'optax']
     assert model_type in ['two-layer', 'one-layer']
 
     min_nll = None 
@@ -550,11 +549,7 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, learnin
 
         # value = compute_nll(init_hyperparams, inputs, outputs, rewards, hyperparams_is_list=False, learning_rule='gd', num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda)
 
-        hyperparams_arr = None 
-        if method == 'jaxopt':
-            hyperparams_arr = sophisticated_fit_params(init_hyperparams, inputs, outputs, rewards, learning_rule=learning_rule, max_iters=max_iters, num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type, batched=batched)
-        else:
-            hyperparams_arr, _ = optax_fit_params(init_hyperparams, inputs, outputs, rewards, learning_rule=learning_rule, max_iters=max_iters, tol=tol, num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type, batched=batched)
+        hyperparams_arr, _ = optax_fit_params(init_hyperparams, inputs, outputs, rewards, nln=nln, learning_rule=learning_rule, max_iters=max_iters, tol=tol, num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type, batched=batched)
 
         hyperparams = None
         if model_type == 'two-layer':
@@ -564,27 +559,25 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, learnin
 
         inferred_nll = None 
         if batched:
-            inferred_nll = compute_batched_nll(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule, model_type=model_type)
+            inferred_nll = compute_batched_nll(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule, model_type=model_type)
         else:
             if model_type == 'two-layer':
                 if num_alpha_blocks == 1:
-                    inferred_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule)
+                    inferred_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule)
                 else:
                     inferred_nll, _ = run_blocked_deep_forward_weight_trajectory(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule, num_blocks=num_alpha_blocks)
             else:
                 inferred_nll, _ = run_onelayer_forward_weight_trajectory(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule)
 
-        # _, nearby_nlls = epsilon_ball_test(hyperparams_arr, inputs, outputs, rewards, subkeys[5], learning_rule=learning_rule, num_samples=25, epsilon=epsilon)
-
         eigvals = None 
         grad = None
         if not jnp.isnan(inferred_nll):
-            _, eigvals = compute_hessian(hyperparams_arr, inputs, outputs, rewards, learning_rule=learning_rule, num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type, batched=batched)
+            _, eigvals = compute_hessian(hyperparams_arr, inputs, outputs, rewards, nln=nln, learning_rule=learning_rule, num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type, batched=batched)
 
             if batched:
-                grad = jax.grad(compute_batched_nll)(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule, model_type=model_type)
+                grad = jax.grad(compute_batched_nll)(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule, model_type=model_type)
             else:
-                grad = jax.grad(compute_nll)(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, learning_rule=learning_rule, num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type)
+                grad = jax.grad(compute_nll)(hyperparams_arr, inputs, outputs, rewards, hyperparams_is_list=True, nln=nln, learning_rule=learning_rule, num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, model_type=model_type)
 
         # \nNearby NLLs: {nearby_nlls}
         print(f'Iter {i+1} Inferred NLL: {inferred_nll} \nGradient: {grad} \nHessian eigvals: {eigvals}')
@@ -598,8 +591,6 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, learnin
         print('\n\n')
 
         if ((min_nll is None and not jnp.isnan(inferred_nll)) or (not jnp.isnan(inferred_nll) and inferred_nll < min_nll)):
-            # if eigvals is None or (eigvals[0] < 0):
-            #     continue
             min_nll = inferred_nll
             if model_type == 'two-layer':
                 best_w0 = {'W1_diag' : hyperparams['W1_diag_0'], 'W2' : hyperparams['W2_0']}
@@ -612,7 +603,7 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, learnin
 
 
 def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_model_type, 
-                              session_info, key, num_train_sets=1, num_test_sets=1, vary_inputs=False, 
+                              session_info, key, nln=jax.nn.identity, num_train_sets=1, num_test_sets=1, vary_inputs=False, 
                               true_w0=None, do_bias_stratified_split=False, one_layer_scale=None,
                               fixed_inputs=None):
     assert true_learning_rule in ['gd', 'te']
@@ -650,11 +641,15 @@ def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_mo
     num_trials = num_sessions * num_samples_per_session
     z = 1.*num_zero_contrast / num_samples_per_session
 
+    gd_with_nln = False 
+    if nln is not jax.nn.identity:
+        gd_with_nln = True
+
     w0 = None
     if true_w0 is None: 
         if true_model_type == 'two-layer':
             if true_learning_rule == 'gd':
-                w0, (_, _) = random_init_params(skeys[1], 3, 3, 2, default_single_loss=True)
+                w0, (_, _) = random_init_params(skeys[1], 3, 3, 2, default_single_loss=True, gd_with_nln=gd_with_nln)
             else:
                 w0, (_, _) = random_init_params(skeys[1], 3, 3, 2, default_tutor_executor=True)
         else:
@@ -707,7 +702,7 @@ def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_mo
 
         results_dict = None
         if true_model_type == 'two-layer':
-            _, _, results_dict = fit_deep_net(w0_copy, num_trials, inputs, targets, None, true_beta, subkeys[4], loss_type='gd_and_te',
+            _, _, results_dict = fit_deep_net(w0_copy, num_trials, inputs, targets, None, true_beta, subkeys[4], nln=nln, loss_type='gd_and_te',
                                           end_condition=True, zero_contrast_mask=mask, num_sessions=num_sessions, num_grading_levels=num_grading_levels,
                                           nonneg_constraint=False, gd_te_lrs=(gd_W1_alpha_star, gd_W2_alpha_star, te_W2const_alpha_star, te_W2stim_alpha_star), num_lr_blocks=1)
         else:
@@ -763,22 +758,6 @@ def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_mo
     train_test_dict['test_pma_biases'] = [full_data_dict['pma_biases'][i] for i in test_idxs]
     train_test_dict['test_ma_biases'] = [full_data_dict['ma_biases'][i] for i in test_idxs]
     train_test_dict['test_rightward_stats'] = [full_data_dict['rightward_stats'][i] for i in test_idxs]
-
-    # train_test_split.append((inputs, outputs, rewards, w0_copy2))
-    # if i < num_train_sets:
-    #     train_test_dict['train_inputs'].append(inputs)
-    #     train_test_dict['train_outputs'].append(outputs)
-    #     train_test_dict['train_rewards'].append(rewards)
-    #     train_test_dict['train_pma_biases'].append(pma_bias)
-    #     train_test_dict['train_ma_biases'].append(ma_bias)
-    #     train_test_dict['train_rightward_stats'].append(rightward_stats)
-    # else:
-    #     train_test_dict['test_inputs'].append(inputs)
-    #     train_test_dict['test_outputs'].append(outputs)
-    #     train_test_dict['test_rewards'].append(rewards)
-    #     train_test_dict['test_pma_biases'].append(pma_bias)
-    #     train_test_dict['test_ma_biases'].append(ma_bias)
-    #     train_test_dict['test_rightward_stats'].append(rightward_stats)
     
     for key in train_test_dict.keys():
         if key in ['train_inputs', 'train_outputs', 'train_rewards', 'train_q_vals', 'test_inputs', 'test_outputs', 'test_rewards', 'test_q_vals']:
@@ -787,14 +766,14 @@ def generate_train_test_split(true_alpha, true_beta, true_learning_rule, true_mo
     return train_test_split, train_test_dict
 
 
-def run_test_set_validation(true_hyperparams, inferred_hyperparams, true_learning_rule, test_learning_rule, test_data, test_model_type='two-layer', plot_trajectories=True):
+def run_test_set_validation(true_hyperparams, inferred_hyperparams, true_learning_rule, test_learning_rule, test_data, test_model_type='two-layer', nln=jax.nn.identity, plot_trajectories=True):
     assert test_model_type in ['two-layer', 'one-layer']
 
     (test_inputs, test_outputs, test_rewards) = test_data
-    true_nll, true_ws = run_deep_forward_weight_trajectory(true_hyperparams, test_inputs, test_outputs, test_rewards, learning_rule=true_learning_rule, hyperparams_is_list=True)
+    true_nll, true_ws = run_deep_forward_weight_trajectory(true_hyperparams, test_inputs, test_outputs, test_rewards, nln=nln, learning_rule=true_learning_rule, hyperparams_is_list=True)
 
     if test_model_type == 'two-layer':
-        inferred_nll, inferred_ws = run_deep_forward_weight_trajectory(inferred_hyperparams, test_inputs, test_outputs, test_rewards, learning_rule=test_learning_rule, hyperparams_is_list=True)
+        inferred_nll, inferred_ws = run_deep_forward_weight_trajectory(inferred_hyperparams, test_inputs, test_outputs, test_rewards, nln=nln, learning_rule=test_learning_rule, hyperparams_is_list=True)
     else:
         inferred_nll, inferred_ws = run_onelayer_forward_weight_trajectory(inferred_hyperparams, test_inputs, test_outputs, test_rewards, test_learning_rule, hyperparams_is_list=True)
 
@@ -819,7 +798,7 @@ def run_test_set_validation(true_hyperparams, inferred_hyperparams, true_learnin
     return
 
 
-def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type, num_trials, key, num_train_per_trial=1, num_test_per_trial=1, 
+def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type, num_trials, key, nln=jax.nn.identity, num_train_per_trial=1, num_test_per_trial=1, 
                                              session_info=(40, 4, 30, 10), num_opt_seeds=20, fixed_alpha=None, fixed_beta=None, vary_inputs=False, 
                                              true_w0=None, do_bias_stratified_split=False, save_data=True, name=''):
     assert true_learning_rule in ['gd', 'te']
@@ -866,7 +845,7 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
             beta_star = jr.uniform(skeys[7], minval=5.0, maxval=15.0)
 
         datasets, train_test_dict = generate_train_test_split(alpha_star, beta_star, true_learning_rule, true_model_type, session_info, 
-                                                              skeys[3], num_train_sets=num_train_per_trial, num_test_sets=num_test_per_trial, 
+                                                              skeys[3], nln=nln, num_train_sets=num_train_per_trial, num_test_sets=num_test_per_trial, 
                                                               vary_inputs=vary_inputs, true_w0=true_w0, do_bias_stratified_split=do_bias_stratified_split)
         (_, _, _, train_w0) = datasets[0] 
         train_inputs = train_test_dict['train_inputs']
@@ -897,16 +876,15 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
                     hyperparams_arr = jnp.concatenate([jnp.log(jnp.array([alpha_star, beta_star])), train_w0['W1_diag'], train_w0['W2'].reshape(-1)])
                 else:
                     hyperparams_arr = jnp.concatenate([jnp.log(jnp.array([alpha_star, beta_star])), train_w0['W'].reshape(-1)])
-                true_nll = compute_batched_nll(hyperparams_arr, train_inputs, train_outputs, train_rewards, hyperparams_is_list=True, learning_rule=true_learning_rule, model_type=model_type)
-                # true_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, train_inputs, train_outputs, train_rewards, learning_rule=true_learning_rule, hyperparams_is_list=True)
+                true_nll = compute_batched_nll(hyperparams_arr, train_inputs, train_outputs, train_rewards, hyperparams_is_list=True, nln=nln, learning_rule=true_learning_rule, model_type=model_type)
+                # true_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, train_inputs, train_outputs, train_rewards, nln=nln, learning_rule=true_learning_rule, hyperparams_is_list=True)
                 train_nlls[i, 0] = true_nll
                 print(f'Training Data (ground truth) NLL with {true_learning_rule} as the true learning rule: {true_nll}')
             else:
                 print(f'\nPerforming inference in a {model_type} network with the {test_learning_rule} learning rule...')
                 num_alpha_blocks = 1
                 _, min_nll, hyperparams_arr = run_randomized_optimization_procedure(train_inputs, train_outputs, train_rewards, opt_key, learning_rule=test_learning_rule, model_type=model_type,
-                                                                                    num_seeds=num_opt_seeds, max_iters=1_000, 
-                                                                                    tol=1e-6, method='optax',
+                                                                                    num_seeds=num_opt_seeds, max_iters=500, nln=nln, tol=1e-4, 
                                                                                     alpha_init_scale=0.1, beta_init_scale=1., w0_init_scale=0.1, 
                                                                                     num_alpha_blocks=num_alpha_blocks, l2_lambda=0., batched=True)
                 # hyperparams = {'alpha' : hyperparams_arr[:num_alpha_blocks], 'beta' : hyperparams_arr[num_alpha_blocks], 'W1_diag_0' : hyperparams_arr[num_alpha_blocks+1:num_alpha_blocks+4], 'W2_0' : hyperparams_arr[num_alpha_blocks+4:num_alpha_blocks+10].reshape(2, 3)}
@@ -928,7 +906,7 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
                 if j == 0:
                     true_test_nll = None 
                     if true_model_type == 'two-layer':
-                        true_test_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, test_inputs, test_outputs, test_rewards, learning_rule=true_learning_rule, hyperparams_is_list=True)
+                        true_test_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, test_inputs, test_outputs, test_rewards, nln=nln, learning_rule=true_learning_rule, hyperparams_is_list=True)
                     else:
                         true_test_nll, _ = run_onelayer_forward_weight_trajectory(hyperparams_arr, test_inputs, test_outputs, test_rewards, learning_rule=true_learning_rule, hyperparams_is_list=True)
                     test_nlls[i, 0, k] = true_test_nll
@@ -936,7 +914,7 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
                     inferred_test_nll = None 
                     # len_params = None
                     if model_type == 'two-layer':
-                        inferred_test_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, test_inputs, test_outputs, test_rewards, test_learning_rule, hyperparams_is_list=True)
+                        inferred_test_nll, _ = run_deep_forward_weight_trajectory(hyperparams_arr, test_inputs, test_outputs, test_rewards, test_learning_rule, hyperparams_is_list=True, nln=nln)
                         # len_params = 11
                     else:
                         # len_params = 8
@@ -947,7 +925,7 @@ def run_multi_trial_learning_rule_validation(true_learning_rule, true_model_type
                     # inferred_hyperparams = inferred_hyperparams_collection[i, j-1, :len_params]
                     
                     # true_nll, _ = run_deep_forward_weight_trajectory(true_hyperparams, test_inputs, test_outputs, test_rewards, hyperparams_is_list=hyperparams_is_list, learning_rule=true_learning_rule)
-                    true_nll = compute_nll(true_hyperparams, test_inputs, test_outputs, test_rewards, hyperparams_is_list=hyperparams_is_list, learning_rule=true_learning_rule, model_type=true_model_type)
+                    true_nll = compute_nll(true_hyperparams, test_inputs, test_outputs, test_rewards, hyperparams_is_list=hyperparams_is_list, nln=nln, learning_rule=true_learning_rule, model_type=true_model_type)
                     # true_ws_arr = flatten_params(true_ws)
                     # inferred_ws_arr = flatten_params(inferred_ws)
 
@@ -1072,7 +1050,7 @@ def one_layer_approximation():
 
 
 def main():
-    key = jr.PRNGKey(774)   
+    key = jr.PRNGKey(55)   
     _, key, skey = jr.split(key, 3)
 
     # _, key, skey, sskey, ssskey, sssskey = jr.split(key, 6)
@@ -1147,20 +1125,22 @@ def main():
     # if accs[:34].max() < expert_threshold:
     #     print('Failed to reach expert status!')
     #     # print(1./0)
-    alpha_star = 0.003
-    beta_star = 10. 
+    alpha_star = 0.004
+    beta_star = 13. 
     true_learning_rule = 'gd'
     true_model_type = 'two-layer'
+    nln = jax.lax.erf
+
     num_sessions = 40
     num_grading_levels = 4
     num_samples_per_grading = 30
     num_zero_contrast = 10
     session_info = (num_sessions, num_grading_levels, num_samples_per_grading, num_zero_contrast)
 
-    num_test_sets = 1
+    num_test_sets = 0
     num_train_sets = 1
     vary_inputs = False
-    datasets, train_test_dict = generate_train_test_split(alpha_star, beta_star, true_learning_rule, true_model_type, session_info, key, 
+    datasets, train_test_dict = generate_train_test_split(alpha_star, beta_star, true_learning_rule, true_model_type, session_info, key, nln=nln,
                                                           num_train_sets=num_train_sets, num_test_sets=num_test_sets, vary_inputs=vary_inputs)
     
     ground_truth_test_biases = train_test_dict['test_ma_biases']
@@ -1195,12 +1175,12 @@ def main():
     print(f'\nTesting the {test_learning_rule} learning rule...')
     
     # true_nll, true_ws = run_deep_forward_weight_trajectory(true_hyperparams, train_inputs, train_outputs, train_rewards, hyperparams_is_list=True, learning_rule=true_learning_rule)
-    true_batched_nll = compute_batched_nll(true_hyperparams, batched_train_inputs, batched_train_outputs, batched_train_rewards, hyperparams_is_list=True, learning_rule=true_learning_rule, model_type=true_model_type)
+    true_batched_nll = compute_batched_nll(true_hyperparams, batched_train_inputs, batched_train_outputs, batched_train_rewards, hyperparams_is_list=True, nln=nln, learning_rule=true_learning_rule, model_type=true_model_type)
 
     hyperparams_is_list = True
     true_nlls = None 
     if true_model_type == 'two-layer':
-        true_nlls, true_ws = batched_run_deep_forward_weight_trajectory(true_hyperparams, batched_train_inputs, batched_train_outputs, batched_train_rewards, true_learning_rule, hyperparams_is_list)
+        true_nlls, true_ws = batched_run_deep_forward_weight_trajectory(true_hyperparams, batched_train_inputs, batched_train_outputs, batched_train_rewards, true_learning_rule, hyperparams_is_list, nln)
     else:
         true_nlls, true_ws = batched_run_onelayer_forward_weight_trajectory(true_hyperparams, batched_train_inputs, batched_train_outputs, batched_train_rewards, true_learning_rule, hyperparams_is_list)
 
@@ -1230,9 +1210,8 @@ def main():
     l2_lambda = 0.  # 1.
     hyperparams_is_list = True 
     w0_inferred, min_nll, hyperparams_arr = run_randomized_optimization_procedure(batched_train_inputs, batched_train_outputs, batched_train_rewards, subkeys[5], learning_rule=test_learning_rule,
-                                                                                  num_seeds=20, max_iters=500, 
-                                                                                  tol=1e-4, method='optax',
-                                                                                  alpha_init_scale=0.01, beta_init_scale=1., w0_init_scale=0.1, 
+                                                                                  num_seeds=15, max_iters=500, tol=1e-4, nln=nln,
+                                                                                  alpha_init_scale=0.01, beta_init_scale=10., w0_init_scale=0.1,
                                                                                   num_alpha_blocks=num_alpha_blocks, l2_lambda=l2_lambda, batched=True, model_type=test_model_type)
     
     hyperparams = None 
@@ -1309,13 +1288,11 @@ def main():
         fig, axs = plt.subplots(2, 3, figsize=(18, 10), sharex=True, sharey=True)
         
         (curr_inputs, curr_outputs, curr_rewards, _) = datasets[k]
-        true_nll, true_ws = run_deep_forward_weight_trajectory(true_hyperparams, curr_inputs, curr_outputs, curr_rewards, true_learning_rule, hyperparams_is_list=True)
+        true_nll, true_ws = run_deep_forward_weight_trajectory(true_hyperparams, curr_inputs, curr_outputs, curr_rewards, true_learning_rule, hyperparams_is_list=True, nln=nln)
         print(f'True Data NLL: {true_nll}')
-        true_ws_arr = flatten_params(true_ws)
 
-        inferred_nll, inferred_ws = run_deep_forward_weight_trajectory(hyperparams_arr, curr_inputs, curr_outputs, curr_rewards, true_learning_rule, hyperparams_is_list=True)
+        inferred_nll, inferred_ws = run_deep_forward_weight_trajectory(hyperparams_arr, curr_inputs, curr_outputs, curr_rewards, true_learning_rule, hyperparams_is_list=True, nln=nln)
         print(f'Inferred Test NLL: {inferred_nll}\n')
-        inferred_ws_arr = flatten_params(inferred_ws)
         # realigned_inferred_ws_arr = realign_weight_trajectories(true_ws_arr, inferred_ws_arr)
 
         true_eff_trajectories = flatten_params(true_ws)

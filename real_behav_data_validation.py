@@ -1,16 +1,11 @@
 import jax
 import jax.numpy as jnp
 import jax.random as jr
-from jax import grad, vmap, jit, value_and_grad
-from jax import lax
-from jax import debug
 from jax.tree_util import tree_map
 import numpy as np
 import pickle as pkl
 
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
 import seaborn as sns
 import pandas as pd
 
@@ -287,6 +282,10 @@ def plot_single_trial_relative_aics(aic_data, fips, trial_idxs,
 
 
 if __name__ == "__main__":
+
+    with open('all_mice_IBL_behavioral_data.pkl', 'rb') as f:
+        all_mice_behav_dict = pkl.load(f)
+    
 
     expert_threshold = 0.7
     fips = np.load('all_mice_IBL_fips.npy')

@@ -20,6 +20,7 @@ ENV/
 # Ignore the example training script explicitly (keep it untracked)
 /examples/train_metric_gd_example.py
 train_metric_gd_example.py
+/hessian_test/test.py
 
 # Common Python artifacts
 __pycache__/

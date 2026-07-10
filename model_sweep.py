@@ -25,7 +25,7 @@ from shallow_linear_net import shallow_net, shallow_net_params, fit_shallow_mode
 import metric_GD_network
 
 def simple_sweep(model_type, num_models, num_sessions, num_samples_per_session, inputs, targets,
-                 zero_contrast_mask, key, loss_type='tutor_executor', save_data=True, num_grading_levels=2,
+                 zero_contrast_mask, key, nln=jax.nn.identity, loss_type='tutor_executor', save_data=True, num_grading_levels=2,
                  zero_contrast_fraction=0.04, expert_threshold=0.7, accs_iter_threshold=34, nonneg_constraint=True): # 34 <--> 8500 iters
     '''
     Train multiple seeds of a shallow linear network on the same binary decision-making task,
@@ -76,7 +76,7 @@ def simple_sweep(model_type, num_models, num_sessions, num_samples_per_session, 
             params, losses, results_dict = fit_shallow_model(params, num_trials, inputs, targets, lr, beta, sskey, loss_type=loss_type,
                                                              end_condition=True, zero_contrast_mask=mask, num_sessions=num_sessions, num_grading_levels=num_grading_levels, nonneg_constraint=nonneg_constraint)
         else:
-            params, losses, results_dict = fit_deep_net(params, num_trials, inputs, targets, lr, beta, sskey, loss_type=loss_type,
+            params, losses, results_dict = fit_deep_net(params, num_trials, inputs, targets, lr, beta, sskey, nln=nln, loss_type=loss_type,
                                                end_condition=True, zero_contrast_mask=mask, num_sessions=num_sessions, num_grading_levels=num_grading_levels, nonneg_constraint=nonneg_constraint)
 
 

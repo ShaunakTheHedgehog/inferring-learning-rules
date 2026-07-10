@@ -8,16 +8,670 @@ import optax
 import numpy as np
 
 import pickle as pkl
+from scipy import stats
+from scipy.signal import argrelmax
 
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
-import pdb
+import matplotlib.colors as colors
+import matplotlib.patches as mpatches
+from matplotlib.patches import FancyBboxPatch
+from matplotlib.lines import Line2D
+import matplotlib.ticker as mticker
+import matplotlib.lines as mlines
 
-# from flax import linen as nn
 import functools
 import random
 import math
+from scipy.optimize import curve_fit
+from globals import NUM_GRADING_LEVELS
+
+
+def pad_sequence(arr, target_len):
+    pad_width = [(0, target_len - arr.shape[0])] + [(0, 0)] * (arr.ndim - 1)
+    return jnp.pad(arr, pad_width)
+
+
+def pad_trial_data(sequences):
+    lengths = jnp.array([s[0].shape[0] for s in sequences])
+    T_max = int(lengths.max())
+
+    inputs  = jnp.stack([pad_sequence(s[0], T_max) for s in sequences])  # (B, T_max, D)
+    outputs = jnp.stack([pad_sequence(s[1], T_max) for s in sequences])  # (B, T_max)
+    rewards = jnp.stack([pad_sequence(s[2], T_max) for s in sequences])  # (B, T_max)
+
+    return inputs, outputs, rewards, lengths 
+
+
+def make_train_mask(num_trials, block_length=20, test_fraction=0.1):
+    # sample blocks of test trials randomly in blocks of roughly length 20, with 10% of trials as test
+    # returns a boolean mask of shape (num_trials,) where True indicates a training trial and False indicates a test trial
+    num_blocks = math.ceil(num_trials / block_length)
+    block_indices = list(range(num_blocks))
+    num_test_blocks = math.ceil(test_fraction * num_blocks)
+    test_block_indices = random.sample(block_indices, num_test_blocks)
+    mask = np.ones(num_trials, dtype=bool)
+    for block_idx in test_block_indices:
+        start = block_idx * block_length
+        end = min(start + block_length, num_trials)
+        mask[start:end] = False
+    return mask
+
+mask = make_train_mask(13_762, block_length=20, test_fraction=0.1)
+num_trains = np.sum(mask)
+num_tests = np.sum(~mask)
+print(num_tests / (num_trains + num_tests))  # should be close to 0.1
+
+# keys = jr.split(jr.PRNGKey(0), 10)
+# sequences = []
+# Ts = [2, 4, 5]
+# for T in Ts:
+#     seq = (jr.normal(keys[0], (T, 3)), jr.randint(keys[1], (T,), 0, 2), jr.randint(keys[2], (T,), 0, 2))
+#     print(seq)
+#     sequences.append(seq)
+
+# lengths = jnp.array([s[0].shape[0] for s in sequences])
+# print(lengths)
+# T_max = int(lengths.max())
+
+# def pad(arr, target_len):
+#     pad_width = [(0, target_len - arr.shape[0])] + [(0, 0)] * (arr.ndim - 1)
+#     return jnp.pad(arr, pad_width)
+
+# inputs  = jnp.stack([pad(s[0], T_max) for s in sequences])  # (B, T_max, D)
+# outputs = jnp.stack([pad(s[1], T_max) for s in sequences])  # (B, T_max, ...)
+# rewards = jnp.stack([pad(s[2], T_max) for s in sequences])  # (B, T_max, ...)
+
+# print(inputs)
+# print(outputs)
+# print(rewards)
+# print(1./0)
+
+
+def make_legend(models_and_mouse=False, mark_expert=False):
+    if models_and_mouse:
+        fig, ax = plt.subplots(figsize=(4.5, 0.5))
+        ax.axis('off')
+
+        handles = [
+            mlines.Line2D([], [], color="#ea2626", linewidth=2, linestyle='-',  label='True Mouse'),
+            mlines.Line2D([], [], color='#2166AC', linewidth=2, linestyle='--', label='1-layer Linear'),
+            mlines.Line2D([], [], color='#F4A736', linewidth=2, linestyle='--', label='2-layer Linear'),
+            mlines.Line2D([], [], color='#2CA02C', linewidth=2, linestyle='--', label='2-layer Nonlinear'),
+        ]
+
+        legend = ax.legend(
+            handles=handles,
+            loc='center',
+            ncol=2,
+            frameon=False,
+            fontsize=11,
+            handlelength=2.5,
+            columnspacing=1.5,
+            handletextpad=0.5,
+        )
+
+        plt.tight_layout()
+        plt.savefig('models_and_mouse_legend.pdf', dpi=300, bbox_inches='tight')
+        plt.show()
+    else:
+        MODEL_COLORS = ['#2166AC', '#F4A736', '#2CA02C']
+        MODEL_NAMES  = ['1-Layer Linear', '2-Layer Linear', '2-Layer Nonlinear']
+
+        legend_handles = [mpatches.Patch(color=c, label=n)
+                        for c, n in zip(MODEL_COLORS, MODEL_NAMES)]
+        ncols = 3
+        if mark_expert:
+            legend_handles += [Line2D([0], [0], marker='o', color='none', ms=8,
+                                markeredgecolor='black', markeredgewidth=1.2, label='Expert')]
+            ncols = 2
+
+        fig, ax = plt.subplots(figsize=(4, 1))
+        ax.axis('off')
+        ax.legend(handles=legend_handles, fontsize=23, frameon=False,
+                loc='center', ncol=ncols, handlelength=2., handleheight=1.2,
+                columnspacing=1.2)
+
+        plt.tight_layout()
+        plt.savefig(f'models_legend_wexperts{mark_expert}.pdf', dpi=300, bbox_inches='tight')
+        plt.show()
+
+# make_legend(mark_expert=True)
+
+
+def find_model_success_rate(aic_data, model_idx):
+    best_idxs = jnp.argmin(aic_data, axis=1)
+    hits = (best_idxs == model_idx)
+    return 1.*jnp.sum(hits)/len(aic_data)
+
+
+def find_winners(aic_data, idx1, idx2):
+    winners = []
+    for i in range(len(aic_data)):
+        if aic_data[i, idx1] <= aic_data[i, idx2]:
+            winners.append(idx1)
+        else:
+            winners.append(idx2)
+    
+    return winners
+
+
+def get_nonlinearity(nln_name):
+    nonlinearities = {
+        'erf': jax.lax.erf,
+        'linear': lambda x: x,
+        'tanh': jnp.tanh,
+        'relu': jax.nn.relu,
+    }
+    try:
+        return nonlinearities[nln_name]
+    except KeyError:
+        raise ValueError(f"Unknown nonlinearity: {nln_name}")
+    
+
+def optimal_sign_flip(y, z):
+    """
+    Find the sign flip vector s in {-1, +1}^3 (over the last axis/columns)
+    that minimizes ||y - z * s||^2, summed over all other dimensions.
+
+    Args:
+        y, z: jnp arrays of shape (T, 3, 3) (two-layer net)
+
+    Returns:
+        s:        sign flip vector of shape (3,), values in {-1, +1}
+        sq_error: scalar, minimized total squared error using optimal s
+    """
+    # Error per column for s=+1 vs s=-1, summed over T and rows
+    # Shape: (3,)
+    err_pos = jnp.sum((y - z) ** 2, axis=(0, 1))   # s_j = +1
+    err_neg = jnp.sum((y + z) ** 2, axis=(0, 1))   # s_j = -1
+
+    s = jnp.where(err_pos <= err_neg, 1.0, -1.0)   # shape (3,)
+    sq_error = jnp.sum(jnp.minimum(err_pos, err_neg))
+
+    return s, sq_error
+    
+
+def compute_variances_along_trajectory(trajectories):
+    return jnp.var(trajectories, axis=0)
+
+
+def get_pearson_correlations(X, y, ignore_nans=True):
+    '''
+    Arguments:
+    X : n x T
+    y : T
+    '''
+    if ignore_nans:
+        valid = ~np.isnan(y)
+        y = y[valid]
+        X = X[:, valid]
+
+    # Demean
+    X_centered = X - X.mean(axis=1, keepdims=True)
+    y_centered = y - y.mean()
+
+    # Numerator: dot product of each row with y
+    numerator = X_centered @ y_centered  # shape (n,)
+
+    # Denominator: product of standard deviations
+    X_std = np.sqrt((X_centered ** 2).sum(axis=1))  # shape (n,)
+    y_std = np.sqrt((y_centered ** 2).sum())         # scalar
+
+    return numerator / (X_std * y_std)  # shape (n,)
+    
+
+def compute_coeff_of_determination(x_model, x_true):
+    ss_res = np.nansum((x_true - x_model) ** 2)
+    ss_tot = np.nansum((x_true - np.nanmean(x_true)) ** 2)
+    r2 = 1 - ss_res / ss_tot
+    return r2
+
+def compute_r2_distribution(model_trajectories, true_trajectory):
+    r2s = []
+    for i in range(model_trajectories.shape[0]):
+        r2 = compute_coeff_of_determination(model_trajectories[i], true_trajectory)
+        r2s.append(r2)
+    return np.asarray(r2s)
+
+
+def visualize_r2_distributions(r2s_arrays, plot_colors, filepath=None,
+                               xlabel=r'$R^2$ (Coeff. of Determination)', xticks=None, xmin=None):
+
+    # create density plot of r2s
+    fig, ax = plt.subplots(figsize=(5.5, 3.5))
+
+    mins = [0.]
+    # r2_mins = [np.min(r2s) for r2s in r2s_arrays]
+    # min_r2 = np.min(r2_mins)
+
+    for r2s, plot_color in zip(r2s_arrays, plot_colors):
+        kde = stats.gaussian_kde(r2s, bw_method='scott')
+        x = np.linspace(r2s.min() - 0.1, 1.0, 300)
+        y = kde(x)
+        ax.plot(x, y, color=plot_color, lw=1.8, zorder=3)
+        ax.fill_between(x, y, color=plot_color, alpha=0.2, linewidth=0, zorder=2)
+
+        # ax.axvline(r2s.mean(), color=plot_color, lw=1.2, linestyle='--', zorder=4,
+        #         label=f'Mean $R^2 = {r2s.mean():.2f}$')
+        ax.axvline(0, color='gray', lw=0.8, linestyle=':', zorder=1)
+
+        # find largest R^2 peak in density
+        peak_idxs = argrelmax(y, order=10)[0]
+        if len(peak_idxs) == 0:
+            peak_idxs = [np.argmax(y)]  # fallback if no local max found
+        peak_x = x[peak_idxs[np.argmax(peak_idxs)]]  # rightmost peak
+        mins.append(peak_x)
+
+        ax.axvline(peak_x, color=plot_color, lw=1.0, linestyle='--', zorder=4, alpha=0.8)
+
+    ax.set_xlabel(xlabel, fontsize=23)
+    ax.set_ylabel('Density', fontsize=24)
+    ax.set_xlim(np.min(np.asarray(mins))-1., 1.0)
+    if xmin is not None:
+        ax.set_xlim(xmin, 1.0)
+    ax.set_ylim(bottom=0)
+
+    if xticks is not None:
+        ax.set_xticks(xticks)
+
+    ax.spines[['top', 'right']].set_visible(False)
+    ax.spines[['left', 'bottom']].set_linewidth(0.8)
+    ax.tick_params(labelsize=21.5, length=3, width=0.8)
+    ax.yaxis.grid(True, linestyle=':', linewidth=0.5, color='#e0e0e0', zorder=0)
+    ax.set_axisbelow(True)
+    ax.legend(fontsize=8.5, frameon=False)
+
+    plt.tight_layout()
+    if filepath is not None:
+        fig.savefig(f'{filepath}', dpi=300, bbox_inches='tight')
+    else:
+        plt.show()
+
+
+
+def run_linear_regression(xs, ys):
+    slope, intercept, r_value, p_value, std_err = stats.linregress(xs, ys)
+    r_squared = r_value**2
+    x_line = np.array([xs.min(), xs.max()])
+    y_line = slope * x_line + intercept
+    return x_line, y_line, r_squared
+
+def sigmoid(x, L, x0, k, b):
+    return L / (1 + np.exp(-k * (x - x0))) + b
+
+def get_sigmoid_fit(x, y):
+    popt, pcov = curve_fit(sigmoid, x, y, p0=[y.max(), np.median(x), 1, y.min()])
+    # Extract parameters
+    L, x0, k, b = popt
+    # Generate fitted data
+    y_fit = sigmoid(x, L, x0, k, b)
+    return y_fit, popt
+
+def calculate_accs_per_session(rewards, trials_per_session):
+    rewards = np.asarray(rewards)
+    trials_per_session = np.asarray(trials_per_session)
+
+    num_sessions = len(trials_per_session)
+    accs = []
+    start_idx = 0
+    for i in range(num_sessions):
+        end_idx = start_idx + trials_per_session[i]
+        session_rewards = rewards[start_idx:end_idx]
+        acc = np.mean(session_rewards)
+        accs.append(acc)
+        start_idx = end_idx
+    return np.array(accs)
+
+
+# def calculate_running_avg_quantity(all_measurements, window):
+#     ndim = all_measurements.ndim 
+#     if ndim == 1:
+#         all_measurements = all_measurements.reshape(1, -1)
+#     running_sums = np.cumsum(all_measurements, axis=1)
+    
+#     # Pad with zeros on the left for convenience
+#     running_sums = np.pad(running_sums, ((0,0),(1,0)), mode='constant')
+    
+#     # Window sums
+#     window_sums = running_sums[:, window:] - running_sums[:, :-window]
+    
+#     running_accs = window_sums / window
+
+#     # for convenience, pad first 'window - 1' trials with NaNs
+#     pad = np.full((all_measurements.shape[0], window-1), np.nan)
+#     running_accs = np.concatenate([pad, running_accs], axis=1)
+
+#     if ndim == 1:
+#         running_accs = running_accs.reshape(-1)
+    
+#     return running_accs 
+
+def get_zero_contrast_mask(inputs):
+    zero_contrast_mask = (inputs[:, 1] == 0) & (inputs[:, 2] == 0)
+    return 1-zero_contrast_mask
+
+
+def calculate_running_avg_quantity(all_measurements, window, mask=None):
+    ndim = all_measurements.ndim
+    if ndim == 1:
+        all_measurements = all_measurements.reshape(1, -1)
+
+    if mask is not None:
+        valid_mask = mask.astype(float)  # shape (n_trials,), broadcasts over rows
+    else:
+        valid_mask = np.ones(all_measurements.shape[1])
+    valid_mask = valid_mask.reshape(1, -1)  # ensure shape is (1, n_trials) for broadcasting
+
+    filled = all_measurements * valid_mask
+
+    # Cumulative sums of values and valid counts
+    cumsum_vals  = np.cumsum(filled, axis=1)
+    cumsum_valid = np.cumsum(valid_mask, axis=1)
+
+    # Pad left with zeros for the sliding-window subtraction trick
+    cumsum_vals  = np.pad(cumsum_vals, ((0, 0), (1, 0)), mode='constant')
+    cumsum_valid = np.pad(cumsum_valid, ((0, 0), (1, 0)), mode='constant')
+
+    # Window sums and counts
+    window_sums   = cumsum_vals[:,  window:] - cumsum_vals[:,  :-window]
+    window_counts = cumsum_valid[:, window:] - cumsum_valid[:, :-window]
+
+    # Divide; windows with zero valid trials → NaN
+    with np.errstate(invalid='ignore'):
+        running_accs = np.where(window_counts > 0, window_sums / window_counts, np.nan)
+
+    # Pad first (window - 1) positions with NaN, consistent with original behaviour
+    pad = np.full((all_measurements.shape[0], window - 1), np.nan)
+    running_accs = np.concatenate([pad, running_accs], axis=1)
+
+    if ndim == 1:
+        running_accs = running_accs.squeeze(0)
+
+    return running_accs
+
+
+def calculate_batched_quantity_per_session(all_measurements, trials_per_session, mask=None):
+    '''
+    Arguments:
+    all_measurements: a 1D or 2D array of shape (num_models, num_trials) containing the given quantity's measurement for each model across all trials
+    trials_per_session: a 1D array of length num_sessions containing the number of trials in each session
+    '''
+    all_measurements = np.asarray(all_measurements)
+    trials_per_session = np.asarray(trials_per_session)
+
+    ndim = all_measurements.ndim
+    if ndim == 1:
+        all_measurements = all_measurements.reshape(1, -1)
+
+    if mask is not None:
+        valid_mask = mask.astype(float)  # shape (n_trials,), broadcasts over rows
+    else:
+        valid_mask = np.ones(all_measurements.shape[1])
+
+    num_sessions = len(trials_per_session)
+    batched_measurements = []
+    start_idx = 0
+    for i in range(num_sessions):
+        curr_mask = valid_mask[start_idx:start_idx + trials_per_session[i]]
+        end_idx = start_idx + trials_per_session[i]
+        session_measurements = all_measurements[:, start_idx:end_idx]
+        session_mean = np.sum(session_measurements * curr_mask, axis=1) / np.sum(curr_mask)
+        batched_measurements.append(session_mean)
+        start_idx = end_idx
+
+    session_avgs = np.array(batched_measurements).T  # shape (num_models, num_sessions)
+
+    if ndim == 1:
+        session_avgs = session_avgs.squeeze(0)
+
+    return session_avgs
+
+
+def calculate_avg_acc_diff_per_trial(session_accs, trials_per_session, baseline_acc=0.5):
+    acc_diffs = np.diff(session_accs)
+    cumulative_acc_diffs = np.sum(acc_diffs / trials_per_session[1:]) + (session_accs[0] - baseline_acc) / trials_per_session[0]
+    avg_acc_diff_per_trial = cumulative_acc_diffs / len(session_accs)
+    return avg_acc_diff_per_trial
+
+def calculate_avg_acc_per_trial(session_accs, trials_per_session):
+    return np.mean(session_accs / trials_per_session)
+
+def calculate_trial_weighted_acc_diff(session_accs, trials_per_session, baseline_acc=0.5):
+    acc_diffs = np.diff(session_accs)
+    cumulative_acc_diffs = np.sum(acc_diffs * trials_per_session[1:]) + (session_accs[0] - baseline_acc) * trials_per_session[0]
+    avg_trial_weighted_acc = cumulative_acc_diffs / np.sum(trials_per_session)
+    return avg_trial_weighted_acc
+
+def calculate_trial_averaged_acc(rewards, inputs, baseline_acc=0.5):
+    mask = get_zero_contrast_mask(inputs)
+    return 2 * (jnp.sum(mask * rewards) / jnp.sum(mask) - baseline_acc)
+
+def calculate_normalized_avg_acc(session_accs, baseline_acc=0.5):
+    avg_acc = np.mean(session_accs)
+    return 2 * (avg_acc - baseline_acc)
+
+
+def measure_sigmoidal_learning_speed(session_accs):
+    '''
+    Fit a sigmoid to the session accuracies and return the slope parameter.
+    '''
+    x_data = np.arange(len(session_accs)) + 1
+    y_data = session_accs
+
+    try:
+        popt, pcov = curve_fit(sigmoid, x_data, y_data, p0=[y_data.max(), np.median(x_data), 0.1, y_data.min()], bounds=([0., -1000., 0., 0.], [1., 1000., 1000., 1.])) 
+        L, x0, k, b = popt
+        learning_ceiling = L + b    # final accuracy in large time limit
+        gain = k                    # gain param of exponential
+        speed = k * L / 4           # max slope of sigmoid
+        y_fit = sigmoid(x_data, L, x0, k, b)
+    except RuntimeError:
+        y_fit = None 
+        learning_ceiling, speed = None, None
+        popt = None
+
+
+    return speed, learning_ceiling, y_fit, popt
+
+
+def extract_specific_grading_levels(inputs):
+    # include zero contrast too
+    right_contrasts = inputs[:, 1]
+    left_contrasts = inputs[:, 2]
+    contrasts = np.concatenate([right_contrasts, left_contrasts])
+    unique_contrasts = np.unique(contrasts)
+    unique_contrasts = np.sort(unique_contrasts)
+    return unique_contrasts
+
+def convert_inds_to_grading_levels(inds, num_grading_levels=NUM_GRADING_LEVELS):
+    grading_unit = 1.0 / num_grading_levels
+    zero_idx = num_grading_levels
+    grading_levels = (inds - zero_idx) * grading_unit
+    return grading_levels
+
+
+# generated with help from Claude, and verified against older implementation
+def vectorized_generate_per_session_psychometrics(inputs, outputs, trials_per_session, num_grading_levels,
+                                                  specific_grading_levels=[0.0625, 0.125, 0.25, 1.0]):
+    """
+    Generate per-session psychometric curves at specified contrast levels.
+
+    Parameters
+    ----------
+    inputs                  : (num_trials, input_dim) array; col 0 is non-stimulus,
+                              cols 1+ are [right_contrast, left_contrast]
+    outputs                 : (num_trials,) or (num_trials, 1); 0 = rightward choice
+    trials_per_session      : (num_sessions,) trial counts per session
+    num_grading_levels      : number of contrast levels excluding zero
+    specific_grading_levels : contrast values to track; None returns all levels
+
+    Returns
+    -------
+    psychometrics   : (num_sessions, num_levels) p(right) per session and level
+    col_inds        : column indices into the full contrast array that were selected
+    rights          : (num_sessions, num_levels) rightward choice counts
+    totals          : (num_sessions, num_levels) total trial counts
+    """
+
+    if specific_grading_levels is None:
+        specific_grading_levels = extract_specific_grading_levels(inputs)
+
+    grading_unit = 1.0 / num_grading_levels
+    zero_idx     = num_grading_levels
+    num_bins     = 2 * num_grading_levels + 1
+    num_sessions = len(trials_per_session)
+
+    # --- Vectorise over all trials at once -----------------------------------
+    # signed_contrast > 0 → right stimulus, < 0 → left stimulus, 0 → zero contrast
+    signed_contrast = inputs[:, 1] - inputs[:, 2]               # (num_trials,)
+    bin_indices     = (zero_idx + np.rint(signed_contrast / grading_unit)).astype(int)
+    went_right      = (outputs.ravel() == 0).astype(float)      # 1 where rightward
+
+    # --- Accumulate per session using bincount (fast, no Python loop) ---------
+    endpoints = np.concatenate(([0], np.cumsum(trials_per_session)))
+    rights = np.zeros((num_sessions, num_bins))
+    totals = np.zeros((num_sessions, num_bins))
+
+    for i, (lo, hi) in enumerate(zip(endpoints[:-1], endpoints[1:])):
+        sess_bins = bin_indices[lo:hi]
+        totals[i] = np.bincount(sess_bins, minlength=num_bins)
+        rights[i] = np.bincount(sess_bins, weights=went_right[lo:hi], minlength=num_bins)
+
+    # --- Select contrast columns ---------------------------------------------
+    intensities = np.rint(np.asarray(specific_grading_levels) / grading_unit).astype(int)
+    nonzero = intensities[intensities > 0]
+
+    parts = [zero_idx - nonzero[::-1]]
+    if 0 in intensities:
+        parts.append([zero_idx])
+    parts.append(zero_idx + nonzero)
+
+    col_inds = np.concatenate(parts)
+
+    rights = rights[:, col_inds]
+    totals = totals[:, col_inds]
+
+    with np.errstate(invalid='ignore', divide='ignore'):
+        psychometrics = np.where(totals > 0, rights / totals, np.nan)
+
+    return psychometrics, col_inds, rights, totals
+
+
+def generate_per_session_psychometrics(inputs, outputs, trials_per_session, num_grading_levels, 
+                                       specific_grading_levels=[0.0625, 0.125, 0.25, 1.0]):
+    '''
+    Generate psychometric curves for each session.
+
+    inputs              :   full set of inputs (num_trials x input_dim)
+    outputs             :   full set of outputs (num_trials x 1)
+    trials_per_session  :   an array containing the number of trials in each session
+    num_grading_levels  :   number of graded contrast levels (excluding zero-contrast)
+    '''
+    num_sessions = len(trials_per_session)
+    grading_unit = 1. / num_grading_levels
+
+    rights_by_grading = np.zeros((num_sessions, 2 * num_grading_levels + 1))
+    totals_by_grading = np.zeros((num_sessions, 2 * num_grading_levels + 1))
+    zero_grading_idx = num_grading_levels
+
+    session_endpoints = np.cumsum(trials_per_session)
+    session_endpoints = np.concatenate((np.array([0]), session_endpoints))      # an array of all the session endpoints
+    
+    for i in range(num_sessions):
+        lower = session_endpoints[i]
+        upper = session_endpoints[i+1]
+        curr_inputs = inputs[lower:upper]
+        curr_outputs = outputs[lower:upper]
+        for j in range(len(curr_inputs)):
+            inp = curr_inputs[j]
+            stim_inp = inp[1:]
+            out = curr_outputs[j]
+
+            grading_intensity = int(np.sum(stim_inp) / grading_unit)
+
+            if (stim_inp[0] != 0):
+                if out == 0:
+                    rights_by_grading[i, zero_grading_idx + grading_intensity] += 1.
+                totals_by_grading[i, zero_grading_idx + grading_intensity] += 1.
+            elif (stim_inp[1] != 0):
+                if out == 0:
+                    rights_by_grading[i, zero_grading_idx - grading_intensity] += 1.
+                totals_by_grading[i, zero_grading_idx - grading_intensity] += 1
+            else:
+                # zero contrast trial
+                if out == 0:
+                    rights_by_grading[i, zero_grading_idx] += 1.
+                totals_by_grading[i, zero_grading_idx] += 1.
+    
+    # psychometrics = rights_by_grading / totals_by_grading
+    with np.errstate(invalid='ignore', divide='ignore'):
+        psychometrics = np.where(totals_by_grading > 0,
+                                rights_by_grading / totals_by_grading,
+                                np.nan)
+    inds = np.arange(len(psychometrics))
+
+    if specific_grading_levels is not None:
+        grading_intensities = np.asarray(specific_grading_levels) / grading_unit 
+        grading_intensities = grading_intensities.astype(int)
+
+        left_inds = zero_grading_idx - np.flip(grading_intensities)
+        right_inds = zero_grading_idx + grading_intensities
+        inds = np.concatenate((left_inds, right_inds))
+
+        psychometrics = psychometrics[:, inds]
+        rights_by_grading = rights_by_grading[:, inds]
+        totals_by_grading = totals_by_grading[:, inds]
+
+    return psychometrics, inds, rights_by_grading, totals_by_grading
+
+
+def calculate_simple_mouse_ma_bias(choices):
+    '''
+    choices : binary outputs (0 = right, 1 = left); shape is either T, or (B, T) if over batch
+    '''
+
+    num_rights = np.sum(choices == 0, axis=-1)
+    num_trials = choices.shape[-1]
+    return (num_rights / num_trials - 0.5) * 2
+
+
+def get_biases_per_session(outputs, trials_per_session, calculate_within_session=False):
+    trial_endpts = np.cumsum(trials_per_session) 
+    trial_startpts = np.concatenate((np.array([0]), np.cumsum(trials_per_session)))
+    num_sessions = len(trials_per_session)
+    biases = np.zeros(num_sessions)
+    for i in range(num_sessions):
+        # curr_inputs = None 
+        curr_outputs = None 
+        if calculate_within_session:
+            # curr_inputs = inputs[trial_startpts[i]:trial_startpts[i+1]]
+            curr_outputs = outputs[trial_startpts[i]:trial_startpts[i+1]]
+        else:
+            # curr_inputs = inputs[:trial_endpts[i]]
+            curr_outputs = outputs[:trial_endpts[i]]
+        
+        # curr_bias = compute_model_agnostic_bias_with_inputs_and_outputs(curr_inputs, curr_outputs, zero_contrast_fraction)
+        curr_bias = calculate_simple_mouse_ma_bias(curr_outputs)
+        biases[i] = curr_bias 
+    return biases 
+
+
+def get_biases_per_session_batched(all_outputs, trials_per_session, calculate_within_session=False):
+    n = all_outputs.shape[0]
+    trial_endpts = np.concatenate((np.array([0]), np.cumsum(trials_per_session)))
+    num_sessions = len(trials_per_session)
+    biases = np.zeros((n, num_sessions))
+
+    for i in range(num_sessions):
+        curr_outputs = None 
+        if calculate_within_session:
+            curr_outputs = all_outputs[:, trial_endpts[i]:trial_endpts[i+1]]
+        else:
+            curr_outputs = all_outputs[:, :trial_endpts[i+1]]
+        
+        curr_bias = calculate_simple_mouse_ma_bias(curr_outputs)
+        biases[:, i] = curr_bias 
+    return biases 
 
 
 def generate_simulated_binary_data(num_samples, key, zero_contrast_fraction=0., add_graded_contrasts=False, num_gradings=4):
@@ -109,7 +763,7 @@ def generate_simulated_binary_data(num_samples, key, zero_contrast_fraction=0., 
 
     return inputs, targets, mask
 
-inputs, outputs, mask = generate_simulated_binary_data(248, jr.PRNGKey(13), zero_contrast_fraction=0.03226, add_graded_contrasts=True, num_gradings=8)
+inputs, all_outputs, mask = generate_simulated_binary_data(248, jr.PRNGKey(13), zero_contrast_fraction=0.03226, add_graded_contrasts=True, num_gradings=8)
 
 
 def generate_graded_contrast_inputs(num_samples_per_grading, num_zero_contrast, key, num_grading_levels=10):
@@ -158,6 +812,8 @@ def generate_randomized_multisession_graded_data(num_sessions, num_gradings, num
 
     return full_inputs, full_targets, full_mask
 
+generate_batched_randomized_multisession_graded_data = jax.vmap(generate_randomized_multisession_graded_data, in_axes=(None, None, None, None, 0))
+
 
 def generate_multisession_graded_data(num_sessions, num_gradings, num_samples_per_grading, num_zero_contrast, key):
     inputs, targets, mask = generate_graded_contrast_inputs(num_samples_per_grading, num_zero_contrast, key, num_grading_levels=num_gradings)
@@ -180,52 +836,22 @@ def generate_multisession_binary_data(num_sessions, num_samples_per_session, key
     '''
     assert zero_contrast_fraction <= 1.0 and zero_contrast_fraction >= 0.0
 
-    inputs, outputs, mask = generate_simulated_binary_data(num_samples_per_session, key, zero_contrast_fraction=zero_contrast_fraction, add_graded_contrasts=add_graded_contrasts, num_gradings=num_gradings)
+    inputs, targets, mask = generate_simulated_binary_data(num_samples_per_session, key, zero_contrast_fraction=zero_contrast_fraction, add_graded_contrasts=add_graded_contrasts, num_gradings=num_gradings)
     inputs = jnp.tile(inputs, (num_sessions, 1))
-    outputs = jnp.tile(outputs, (num_sessions, 1))
+    targets = jnp.tile(targets, (num_sessions, 1))
     mask = jnp.tile(mask, (num_sessions,))
-    return inputs, outputs, mask
+    return inputs, targets, mask
 
 
-def plot_trial_stats(stats, ylabel, benchmark_line=None, color='black', title=None):
-    num_models = stats.shape[0]
-    plt.figure()
-    for i in range(num_models):
-        plt.plot(stats[i], color=color, lw=2.3, alpha=0.3)
-
-    plt.plot(jnp.mean(stats, axis=0), color=color, lw=3)
-    if benchmark_line is not None:
-        plt.axhline(benchmark_line, color='black', lw=2.5, ls='--')
-    plt.xlabel('Trial')
-    plt.ylabel(ylabel)
-
-    if title is not None:
-        plt.title(title)
-
-def plot_R_ZB_L_trial_stats(all_stats, ylabel, benchmark_line=None, title=None, figsize=None):
-    R_stats, ZB_stats, L_stats = all_stats
-    if figsize is not None:
-        plt.figure(figsize=figsize)
-    else:
-        plt.figure()
-    for i in range(R_stats.shape[0]):
-        plt.plot(R_stats[i], color='green', lw=2.3, alpha=0.15)
-    for i in range(ZB_stats.shape[0]):
-        plt.plot(ZB_stats[i], color='orange', lw=2.3, alpha=0.15)
-    for i in range(L_stats.shape[0]):
-        plt.plot(L_stats[i], color='purple', lw=2.3, alpha=0.15)
-
-    plt.plot(jnp.mean(R_stats, axis=0), color='green', lw=3)
-    plt.plot(jnp.mean(ZB_stats, axis=0), color='orange', lw=3)
-    plt.plot(jnp.mean(L_stats, axis=0), color='purple', lw=3)
-
-    if benchmark_line is not None:
-        plt.axhline(benchmark_line, color='black', lw=2.5, ls='--')
-    plt.xlabel('Trial')
-    plt.ylabel(ylabel)
-
-    if title is not None:
-        plt.title(title)
+def generate_full_input_set(num_grading_levels):
+    grading = 1./num_grading_levels
+    gradings = jnp.arange(0, 1. + grading, grading)
+    R_column = jnp.concatenate([jnp.zeros(num_grading_levels), gradings])
+    L_column = jnp.flip(R_column)
+    const_column = jnp.ones(2 * num_grading_levels + 1)
+    xs = jnp.array([const_column, R_column, L_column]).T
+    xs = xs.astype(jnp.float32)
+    return xs
 
 
 def compute_rightward_statistics(inputs, choices):
@@ -248,11 +874,23 @@ def compute_rightward_statistics(inputs, choices):
     return rightward_statistics
 
 
+def compute_model_agnostic_bias_with_inputs_and_outputs(inputs, outputs, zero_contrast_fraction):
+    outputs = outputs.astype(jnp.int32)
+    rightward_stats = compute_rightward_statistics(inputs, outputs)
+    ma_bias = calculate_model_agnostic_bias(rightward_stats, zero_contrast_fraction=zero_contrast_fraction)
+    return ma_bias
+
+
 def calculate_model_agnostic_bias(rightward_statistics, zero_contrast_fraction):
+    tot_num_trials = rightward_statistics[1, :].sum()
+    R_prop = rightward_statistics[1, 0] / tot_num_trials
+    L_prop = rightward_statistics[1, 2] / tot_num_trials
     z = zero_contrast_fraction
     props = rightward_statistics[0] / np.maximum(rightward_statistics[1], 1.)   # avoid edge cases where denominator is 0
-    avg_p_R = (0.5 - z/2.) * props[0] + z * props[1] + (0.5 - z/2.) * props[2]
+    avg_p_R = R_prop * props[0] + z * props[1] + L_prop * props[2]
     return 2 * (avg_p_R - 0.5)      # ensure output ranges from -1 to 1, with 0 being "balanced"
+
+
 
 def calculate_model_based_bias(psychometrics):
     middle_idx = psychometrics.shape[1] // 2
@@ -263,11 +901,13 @@ def calculate_model_based_bias(psychometrics):
     sums = r_slopes + l_slopes
     return np.dot(sums, diffs) / np.sum(sums)
 
+
 def calculate_overall_acc(rightward_statistics):
     correct_rights = rightward_statistics[0, 0]
     correct_lefts = rightward_statistics[1, 2] - rightward_statistics[0, 2]
     acc = (correct_rights + correct_lefts) / (rightward_statistics[1, 0] + rightward_statistics[1, 2])
     return acc
+
 
 def calculate_session_accs(rewards, num_samples_per_session, zero_contrast_mask):
     assert len(rewards) % num_samples_per_session == 0
@@ -280,25 +920,86 @@ def calculate_session_accs(rewards, num_samples_per_session, zero_contrast_mask)
     accs = jnp.mean(rewards_by_trial, axis=1)
     return accs
 
-def plot_psychometrics(psychometrics, plot_every=1_000):
-    plt.figure(figsize=(11, 6))
-    colormap = plt.cm.cool #plt.cm.gist_ncar #nipy_spectral, Set1,Paired
+def plot_psychometrics(psychometrics, plot_every=1_000, use_colormap=True, filepath=None, 
+                       title=None, label_word='Iteration', use_witten_scheme=False, use_ibl_ticks=False,
+                       custom_inds=None, custom_gradings=None):
+    assert label_word in ['Iteration', 'Session', 'Trial']
+    fig, ax = plt.subplots(figsize=(6, 4))
+    colormap = plt.cm.plasma
+    inds = None 
 
-    middle_idx = psychometrics.shape[1] // 2
-    end_idx = psychometrics.shape[1] - 1
-
-    plt.xticks(ticks=[0, middle_idx/2., middle_idx, (middle_idx + end_idx)/2., end_idx], labels=['Left (100%)', 'Left (50%)', 'Zero', 'Right (50%)', 'Right (100%)'], fontsize=15)
-    plt.yticks(fontsize=18)
+    if not use_witten_scheme:
+        if use_ibl_ticks:
+            ibl_inds = [0, 12, 14, 15, 17, 18, 20, 32]
+            ax.set_xticks(ibl_inds)
+            ax.set_xticklabels(['Left\n(100%)', '25%', '12.5%', '6.25%', '6.25%', '12.5%', '25%', 'Right\n(100%)'],
+                               fontsize=8, rotation=45, ha='right')
+        else:
+            assert custom_inds is not None and custom_gradings is not None
+            inds = custom_inds
+            ax.set_xticks(custom_inds)
+            # keep grading levels to at most one place after decimal
+            custom_labels = [f'{g:.3g}' for g in custom_gradings]
+            ax.set_xticklabels(custom_labels, fontsize=8, rotation=0)
+    else:
+        inds = [0, 12, 14, 15, 17, 18, 20, 32]
+        assert psychometrics.shape[1] == len(inds)
+        ax.set_xticks(inds)
+        ax.set_xticklabels(['-1\nLeft', '', '', '', '', '', '', '+1\nRight'],
+                           fontsize=8, rotation=0) #, ha='right')
 
     n = int(len(psychometrics) / plot_every)
     colors = [colormap(i) for i in np.linspace(0, 1, n)]
 
     for i in range(n):
-        plt.plot(psychometrics[plot_every*i], color=colors[i], label=f'Iteration #{plot_every*i}')
+        ax.plot(inds, psychometrics[plot_every * i], color=colors[i],
+                lw=1.2, alpha=0.85, label=f'{label_word} #{plot_every * i}')
+        
+    ax.axhline(0.5, color='gray', linestyle=':', linewidth=0.8, zorder=0)  # chance line
 
-    plt.title('Psychometric Curve', fontsize=20)
+    ax.set_ylabel('P(Right Choice)', fontsize=23)
+    ax.set_ylim(0, 1)
+    ax.set_title(title if title else 'Psychometric Curve', fontsize=23)
 
-    plt.legend(loc='upper left', bbox_to_anchor=(1, 1))
+    ax.spines[['top', 'right']].set_visible(False)
+    ax.spines[['left', 'bottom']].set_linewidth(0.8)
+    # ax.tick_params(axis='y', labelsize=8.5, length=3, width=0.8)
+    # ax.tick_params(axis='x', length=3, width=0.8)
+    ax.yaxis.grid(True, linestyle=':', linewidth=0.5, color='#e0e0e0', zorder=0)
+    ax.set_axisbelow(True)
+
+
+    ax.set_yticks([0, 0.5, 1.0])
+    ax.set_yticklabels(['0', '0.5', '1'], fontsize=21)
+
+    # increase all tick sizes
+    ax.tick_params(axis='both', labelsize=21, length=4, width=1.0)
+
+    if use_colormap:
+        sm = plt.cm.ScalarMappable(cmap=colormap,
+                                   norm=plt.Normalize(vmin=0., vmax=psychometrics.shape[0]))
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=ax, fraction=0.046, pad=0.08)
+        cbar.set_label(f'{label_word} #', fontsize=21)
+
+        # colorbar ticks
+        # upper = 5 * ((psychometrics.shape[0]) // 5)
+        # cbar.set_ticks(np.arange(5, upper+1, 5))
+        # # cbar.set_ticklabels(['5', '10', '15', '20'])
+        cbar.set_ticks([0, psychometrics.shape[0]])
+        cbar.set_ticklabels(['1', f'{psychometrics.shape[0]}'])
+        cbar.ax.tick_params(labelsize=20)
+    else:
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize=8, frameon=False)
+
+
+    plt.tight_layout()
+    
+    if filepath is not None:
+        plt.savefig(f'{filepath}/session_psychometrics.pdf', bbox_inches='tight')
+    else:
+        plt.show()
+
 
 def plot_summary_stats(accs, biases, slope_diffs, stim_DA_biases):
     fig, ax = plt.subplots(4, 1, figsize=(7, 20))
@@ -477,6 +1178,33 @@ def realign_weight_trajectories(true_ws, inferred_ws):
     inferred_ws_realigned = inferred_ws * sign_flip_map.reshape(1, -1)
 
     return inferred_ws_realigned
+
+def visualize_weight_trajectories(depth, ws, filename=None):
+    '''
+    Arguments:
+    depth  :  depth of network ('two-layer' or 'one-layer')
+    ws     :  weight trajectories Pytree with keys 'W1_diag' and 'W2' and first dimension time T
+    '''
+    w_flat = flatten_params(ws)
+
+    nrows = 3
+    if depth == 'one-layer':
+        nrows = 2
+    
+    fig, axs = plt.subplots(nrows, 3, figsize=(8, 2*nrows), sharex=True, sharey=True)
+
+    j = 0
+    for ax in axs.ravel():
+        ax.plot(w_flat[:, j], lw=2.5, color='green', linestyle='dashed')
+        ax.axhline(0, lw=2., color='gray', linestyle=':')
+        j += 1
+
+    if filename is None:
+        plt.show()
+    else:
+        plt.savefig(f'{filename}')
+
+    return
 
 
 def compute_AIC(nll, num_params):

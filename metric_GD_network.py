@@ -5,9 +5,10 @@ from jax import grad, vmap, jit
 from jax import lax
 from jax.tree_util import tree_map
 import numpy as np
+import deep_linear_net
 from deep_linear_net import cortico_striatal_net
 from shallow_linear_net import shallow_net
-from utils import generate_graded_contrast_inputs, calculate_model_agnostic_bias, generate_randomized_multisession_graded_data, stratified_quantile_split_indices, calculate_session_accs
+from utils import generate_graded_contrast_inputs, calculate_model_agnostic_bias, generate_randomized_multisession_graded_data, stratified_quantile_split_indices, calculate_session_accs, generate_full_input_set
 
 
 def random_init_params(key, W1_stim_std=0.05, W1_const_std=0.1, W2_const_std=0.05, W2_stim_std=0.05,
@@ -54,7 +55,7 @@ def random_init_params(key, W1_stim_std=0.05, W1_const_std=0.1, W2_const_std=0.0
 
 
 def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targets, lrs, beta, zero_contrast_mask, 
-                      key, nonneg_constraint=False, end_condition=True, num_grading_levels=4):
+                      key, nln=jax.nn.identity, nonneg_constraint=False, end_condition=True, num_grading_levels=4, pathway_based=False):
     '''
     Train deep linear network on one of two RL-based loss functions.
     model_type          :       specifies depth of network ('two-layer' or 'one-layer')
@@ -65,6 +66,7 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
     lrs                 :       learning rates for W1_diag, W2_const, and W2_stim, respectively
     beta                :       inverse temperature parameter for softmax policy
     key                 :       random number generator key
+    nln                 :       nonlinear activation function (default: identity)
     loss_type           :       string indicating which loss function to use
     nonneg_constraint   :       whether to enforce nonnegativity of W1 and W2
     end_condition       :       whether to stop training 1500 iterations after 70% accuracy is attained
@@ -75,9 +77,12 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
     assert inputs.shape[0] == num_trials
     assert inputs.shape[1] == 3
 
-    # session_mask = None
-    assert num_trials % num_sessions == 0
-    num_samples_per_session = num_trials // num_sessions
+    num_samples_per_session = None 
+    if num_sessions is None:
+        assert end_condition is False 
+    else:
+        assert num_trials % num_sessions == 0
+        num_samples_per_session = num_trials // num_sessions
     threshold_acc_reached_idx = None
     eff_num_trials = num_trials
 
@@ -86,6 +91,9 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
         W1_lr, W2_const_lr, W2_stim_lr = lrs 
 
         lrs_W2 = jnp.array([W2_const_lr, W2_stim_lr, W2_stim_lr]).reshape(1, -1)
+        if pathway_based:
+            assert W1_lr == 0. 
+            W1_lr = lrs_W2.copy().reshape(-1)
         
         lrs_gd = {
             "W1_diag": W1_lr,
@@ -99,6 +107,7 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
         lrs_gd = {
             "W": lrs_W
         }
+    print(f'Training with learning rates: {lrs_gd}')
 
     
     @jit
@@ -107,7 +116,7 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
         Q_L = out[1]
         p_R = 1.0 / (1.0 + jnp.exp(-beta * (Q_R - Q_L)))
         p_L = 1 - p_R
-        choice_idx = jr.bernoulli(key, p=p_L)
+        choice_idx = jr.bernoulli(key, p=p_L)   # 0 corresponds to 'right', 1 to 'left'
         choice_idx = jnp.where(choice_idx, 1, 0)
 
         return p_R, p_L, choice_idx
@@ -116,7 +125,7 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
     def _run_model(params, x):
         out = None 
         if model_type == 'two-layer':
-            out, _ = cortico_striatal_net(params, x)
+            out, _ = cortico_striatal_net(params, x, nln=nln)
         else:
             out = shallow_net(params, x)
         return out 
@@ -142,8 +151,8 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
         out = _run_model(params, x)
         _, _, choice_idx = _softmax_policy(out, key)
 
-        Q_R_stim = jnp.dot(W2[0, 1:], W1_diag[1:] * x[1:])
-        Q_L_stim = jnp.dot(W2[1, 1:], W1_diag[1:] * x[1:])
+        Q_R_stim = jnp.dot(W2[0, 1:], nln(W1_diag[1:] * x[1:]))
+        Q_L_stim = jnp.dot(W2[1, 1:], nln(W1_diag[1:] * x[1:]))
         Q_stim = jnp.where((choice_idx == 0), Q_R_stim, Q_L_stim)
 
         p_R_stim, p_L_stim, _ = _softmax_policy([Q_R_stim, Q_L_stim], jr.PRNGKey(1))
@@ -200,12 +209,7 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
     @jit
     def _psychometric_data(params): # UPDATE THIS
         # inputs, going from left to right
-        grading = 1./num_grading_levels
-        gradings = jnp.arange(0, 1. + grading/2, grading)
-        R_column = jnp.concatenate([jnp.zeros(num_grading_levels), gradings])
-        L_column = jnp.flip(R_column)
-        const_column = jnp.ones(2 * num_grading_levels + 1)
-        xs = jnp.array([const_column, R_column, L_column]).T
+        xs = generate_full_input_set(num_grading_levels)
         data = []
 
         for x in xs:
@@ -222,14 +226,14 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
         W2 = params["W2"]               # (2, 3)
 
         right_x = jnp.array([1., 1., 0.])
-        Q_R_stim = jnp.dot(W2[0, 1:], W1_diag[1:] * right_x[1:])
-        Q_L_stim = jnp.dot(W2[1, 1:], W1_diag[1:] * right_x[1:])
+        Q_R_stim = jnp.dot(W2[0, 1:], nln(W1_diag[1:] * right_x[1:]))
+        Q_L_stim = jnp.dot(W2[1, 1:], nln(W1_diag[1:] * right_x[1:]))
         p_R_stim, p_L_stim, _ = _softmax_policy([Q_R_stim, Q_L_stim], jr.PRNGKey(1))
         right_stim_DA = Q_R_stim * p_R_stim + Q_L_stim * p_L_stim
 
         left_x = jnp.array([1., 0., 1.])
-        Q_R_stim = jnp.dot(W2[0, 1:], W1_diag[1:] * left_x[1:])
-        Q_L_stim = jnp.dot(W2[1, 1:], W1_diag[1:] * left_x[1:])
+        Q_R_stim = jnp.dot(W2[0, 1:], nln(W1_diag[1:] * left_x[1:]))
+        Q_L_stim = jnp.dot(W2[1, 1:], nln(W1_diag[1:] * left_x[1:]))
         p_R_stim, p_L_stim, _ = _softmax_policy([Q_R_stim, Q_L_stim], jr.PRNGKey(1))
         left_stim_DA = Q_R_stim * p_R_stim + Q_L_stim * p_L_stim
 
@@ -353,8 +357,9 @@ def fit_metric_GD_net(model_type, params, num_trials, num_sessions, inputs, targ
 
 
 def generate_metric_GD_train_test_split(true_alphas, true_beta, true_model_type, 
-                              session_info, key, num_train_sets=1, num_test_sets=1, vary_inputs=False, 
-                              true_w0=None, do_bias_stratified_split=False, fixed_inputs=None, nonneg_init_weights=False):
+                              session_info, key, nln=jax.nn.identity, num_train_sets=1, num_test_sets=1, vary_inputs=False, 
+                              true_w0=None, do_bias_stratified_split=False, fixed_inputs=None, nonneg_init_weights=False,
+                              pathway_based=False, use_saxe_lak_gd_init=False):
     assert true_model_type in ['two-layer', 'one-layer']
 
     def _show_bias_stats(results_dict, z):
@@ -377,7 +382,10 @@ def generate_metric_GD_train_test_split(true_alphas, true_beta, true_model_type,
 
     w0 = None 
     if true_w0 is None:
-        w0, _, _ = random_init_params(skeys[1], model_type=true_model_type, enforce_nonnegativity=nonneg_init_weights)
+        if use_saxe_lak_gd_init:
+            w0, _ = deep_linear_net.random_init_params(skeys[1], 3, 3, 2, default_single_loss=True)
+        else:
+            w0, _, _ = random_init_params(skeys[1], model_type=true_model_type, enforce_nonnegativity=nonneg_init_weights)
     else:
         w0 = true_w0
 
@@ -421,8 +429,8 @@ def generate_metric_GD_train_test_split(true_alphas, true_beta, true_model_type,
 
         _, _, results_dict = fit_metric_GD_net(true_model_type, w0_copy, num_trials=num_trials, num_sessions=num_sessions,
                                                inputs=inputs, targets=targets, lrs=true_alphas, beta=true_beta,
-                                               zero_contrast_mask=mask, key=subkeys[3],
-                                               nonneg_constraint=False, end_condition=True, num_grading_levels=num_grading_levels)
+                                               zero_contrast_mask=mask, key=subkeys[3], nln=nln,
+                                               nonneg_constraint=False, end_condition=True, num_grading_levels=num_grading_levels, pathway_based=pathway_based)
         
         # inputs = jnp.array(inputs)
         outputs = jnp.array(results_dict['outputs'])
