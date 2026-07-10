@@ -56,10 +56,10 @@ def make_train_mask(num_trials, block_length=20, test_fraction=0.1):
         mask[start:end] = False
     return mask
 
-mask = make_train_mask(13_762, block_length=20, test_fraction=0.1)
-num_trains = np.sum(mask)
-num_tests = np.sum(~mask)
-print(num_tests / (num_trains + num_tests))  # should be close to 0.1
+# mask = make_train_mask(13_762, block_length=20, test_fraction=0.1)
+# num_trains = np.sum(mask)
+# num_tests = np.sum(~mask)
+# print(num_tests / (num_trains + num_tests))  # should be close to 0.1
 
 # keys = jr.split(jr.PRNGKey(0), 10)
 # sequences = []
@@ -762,8 +762,6 @@ def generate_simulated_binary_data(num_samples, key, zero_contrast_fraction=0., 
         inputs *= big_mask
 
     return inputs, targets, mask
-
-inputs, all_outputs, mask = generate_simulated_binary_data(248, jr.PRNGKey(13), zero_contrast_fraction=0.03226, add_graded_contrasts=True, num_gradings=8)
 
 
 def generate_graded_contrast_inputs(num_samples_per_grading, num_zero_contrast, key, num_grading_levels=10):

@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 from utils import flatten_params, compute_two_layer_flattened_net_params, generate_full_input_set, get_nonlinearity
 from deep_linear_net import cortico_striatal_net
 from shallow_linear_net import shallow_net
-from globals import *
+from globals import FULL_CONTRAST_LEFT_INPUT, FULL_CONTRAST_RIGHT_INPUT, NUM_TWO_LAYER_WEIGHTS, W1_NUM_WEIGHTS, W2_NUM_WEIGHTS
 
 ONE_LAYER_MAX_PARAMS = 10
 NUM_ONE_LAYER_WEIGHTS = 6
@@ -341,9 +341,9 @@ batched_model_forward = vmap(model_forward, in_axes=(0, 0, None))
 @jit
 def log_likelihood(out, choice_idx, log_beta):
     '''
-    out     : the current output of the model 
-    y       : the output that was made by the agent (0 = R, 1 = L)
-    beta    : inverse temperature parameter
+    out        : the current output (Q-values) of the model
+    choice_idx : the choice made by the agent (0 = R, 1 = L)
+    log_beta   : log of the inverse-temperature (softmax gain) parameter
     '''
     Q_y = out[choice_idx]
     Q_opp = out[1-choice_idx]

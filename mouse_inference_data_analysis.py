@@ -37,8 +37,10 @@ from inference_utils import visualize_channel_contributions, visualize_nln_usage
 from inference_utils import extract_weights_from_hyperparams, get_num_alphas, get_depth, model_forward, batched_model_forward, convert_weights_to_dict
 from inference_utils import train_gd_network, gather_input_contributions
 from inference_pipeline import run_single_learning_forward_trajectory, compute_nll, compute_hessian, run_epsilon_ball_test, finite_diff_gradient
-from globals import *
-from single_trial_animal_inference import *
+from globals import (DATASET_TO_CHOICE_KEYWORD, DEPTH_TO_NUM_WEIGHTS, EXPERT_THRESHOLD, MODEL_CLASS_INFO,
+                     MODEL_PLOT_NAMES, MU_ALPHA, MU_BETA, NUM_FINAL_SESSIONS, NUM_GRADING_LEVELS,
+                     NUM_ONE_LAYER_WEIGHTS, NUM_TWO_LAYER_WEIGHTS, RIDGE_ALPHABETA, RIDGE_LAMBDA,
+                     SAXE_BAD_IDXS, WITTEN_DATA_CONTRAST_LEVELS)
 from metric_GD_network import fit_metric_GD_net, generate_metric_GD_train_test_split
 
 

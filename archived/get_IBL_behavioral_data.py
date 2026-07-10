@@ -1,3 +1,7 @@
+# --- path shim: allow running this legacy script standalone after the move to legacy/ ---
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+# --- end path shim ---
 import numpy as np
 import pickle as pkl
 import matplotlib.pyplot as plt

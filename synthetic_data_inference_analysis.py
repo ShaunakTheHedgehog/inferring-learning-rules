@@ -19,11 +19,11 @@ from matplotlib.lines import Line2D
 import scipy.stats as stats
 
 from metric_GD_network import generate_randomized_multisession_graded_data
-from inference_utils import *
-from inference_pipeline import *
-from utils import get_nonlinearity, calculate_running_avg_quantity, calculate_batched_quantity_per_session
+from inference_utils import convert_weights_to_dict, gather_input_contributions, generate_init_weights, train_gd_network
+from inference_pipeline import compute_nll, run_randomized_optimization_procedure, run_single_learning_forward_trajectory
+from utils import get_nonlinearity, calculate_running_avg_quantity, calculate_batched_quantity_per_session, flatten_params
 from utils import optimal_sign_flip, find_winners, find_model_success_rate
-from globals import *
+from globals import DEPTH_TO_NUM_WEIGHTS, MODEL_CLASS_INFO, MU_ALPHA, MU_BETA, OLDER_MODEL_NAMES
 
 
 def run_single_model_inference(inference_model, nln_name, depth, num_sessions, key, num_seeds=30, 

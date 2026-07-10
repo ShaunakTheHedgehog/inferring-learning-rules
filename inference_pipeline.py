@@ -13,26 +13,33 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from metric_GD_network import generate_randomized_multisession_graded_data, generate_metric_GD_train_test_split
-from inference_utils import *
-from utils import get_nonlinearity, calculate_running_avg_quantity, calculate_batched_quantity_per_session, generate_batched_randomized_multisession_graded_data, pad_sequence, make_train_mask
-from globals import DEPTH_TO_NUM_WEIGHTS
+from inference_utils import (apply_learning_updates, convert_weights_to_dict, generate_init_hyperparams,
+                             get_depth, get_num_alphas, log_likelihood, model_forward,
+                             squared_error_loss_fn, train_gd_network, unpack_hyperparams)
+from utils import get_nonlinearity, calculate_running_avg_quantity, calculate_batched_quantity_per_session, generate_batched_randomized_multisession_graded_data, pad_sequence, make_train_mask, flatten_params
+from globals import DEPTH_TO_NUM_WEIGHTS, MU_ALPHA, MU_BETA
 
 
 @partial(jit, static_argnames=('nln','inference_model','alpha_W1'))
 def run_train_test_single_learning_forward_trajectory(hyperparams, inputs, outputs, rewards, train_mask, nln, inference_model, alpha_W1):
-    """hyperparams_is_list
+    """Simulate the online-GD learning trajectory for a single sequence and split
+    its negative log-likelihood into train and test portions via `train_mask`.
+
     Arguments:
-    - hyperparams (alphas, beta, w0)
+    - hyperparams: 1-D array packed as (log_alphas, log_beta, w0)
     - inputs
     - outputs
     - rewards
-    - train_mask: binary array of shape (seq_len,) indicating which time steps belong to the training set (1 for train, 0 for test)
+    - train_mask: boolean array of shape (seq_len,); True = train, False = test
     - nln: non-linearity function applied to hidden state of a two-layer network
-    - inference_model 
+    - inference_model
     - alpha_W1 (only used if inference_model is 'fixed_metric_gd')
 
     Returns:
-    - total negative log-likelihood of the data given the hyperparams (alphas, beta)
+    - train_nll: negative log-likelihood summed over training time steps
+    - test_nll:  negative log-likelihood summed over held-out time steps
+    - ws:        weight trajectory (pytree, leading axis = time)
+    - lls:       per-trial log-likelihoods (before masking)
     """
 
     # pass fixed_alpha_W1 by name (matching inference_utils.unpack_hyperparams signature)
@@ -65,18 +72,22 @@ def run_train_test_single_learning_forward_trajectory(hyperparams, inputs, outpu
 
 @partial(jit, static_argnames=('nln','inference_model','alpha_W1'))
 def run_single_learning_forward_trajectory(hyperparams, inputs, outputs, rewards, nln, inference_model, alpha_W1):
-    """hyperparams_is_list
+    """Simulate the online-GD learning trajectory for a single sequence and return
+    its total negative log-likelihood over all trials.
+
     Arguments:
-    - hyperparams (alphas, beta, w0)
+    - hyperparams: 1-D array packed as (log_alphas, log_beta, w0)
     - inputs
     - outputs
     - rewards
     - nln: non-linearity function applied to hidden state of a two-layer network
-    - inference_model 
+    - inference_model
     - alpha_W1 (only used if inference_model is 'fixed_metric_gd')
 
     Returns:
-    - total negative log-likelihood of the data given the hyperparams (alphas, beta)
+    - total_nll: negative log-likelihood summed over all time steps
+    - ws:        weight trajectory (pytree, leading axis = time)
+    - lls:       per-trial log-likelihoods
     """
 
     # # pass fixed_alpha_W1 by name (matching inference_utils.unpack_hyperparams signature)
@@ -111,19 +122,23 @@ def run_single_learning_forward_trajectory(hyperparams, inputs, outputs, rewards
 
 @partial(jit, static_argnames=('nln','inference_model','alpha_W1'))
 def batched_run_forward_learning_trajectory(hyperparams, inputs, outputs, rewards, lengths, nln, inference_model, alpha_W1):
-    """hyperparams_is_list
+    """Simulate the online-GD learning trajectory for a padded batch of sequences
+    (vmapped over the batch), ignoring padded time steps via `lengths`.
+
     Arguments:
-    - hyperparams (alphas, beta, w0)
+    - hyperparams: 1-D array packed as (log_alphas, log_beta, w0)
     - inputs: array of shape (batch_size, max_seq_len, input_dim)
     - outputs: array of shape (batch_size, max_seq_len) containing integer class labels
     - rewards: array of shape (batch_size, max_seq_len) containing rewards for each trial
     - lengths: array of shape (batch_size,) indicating the length of each sequence in the batch
     - nln: non-linearity function applied to hidden state of a two-layer network
-    - inference_model 
+    - inference_model
     - alpha_W1 (only used if inference_model is 'fixed_metric_gd')
 
     Returns:
-    - total negative log-likelihood of the data given the hyperparams (alphas, beta)
+    - total_nlls: (batch_size,) negative log-likelihood per sequence (padding excluded)
+    - all_ws:     batched weight trajectories (pytree, axes = (batch, time, ...))
+    - all_lls:    (batch_size, max_seq_len) per-trial log-likelihoods (0 on padding)
     """
 
     # pass fixed_alpha_W1 by name (matching inference_utils.unpack_hyperparams signature)
@@ -177,23 +192,23 @@ def batched_run_forward_learning_trajectory(hyperparams, inputs, outputs, reward
     return total_nlls, all_ws, all_lls
 
 
-@partial(jit, static_argnames=('nln','inference_model','batched', 'alpha_W1', 'num_weights', 'ridge_lambda', 'alphabeta_ridge', 'mu_alpha', 'mu_beta'))
-def compute_nll(hyperparams, inputs, outputs, rewards, nln, inference_model, batched, 
-                lengths=None, masked=False, train_mask=None, alpha_W1=None, num_weights=9, 
+@partial(jit, static_argnames=('nln','inference_model','batched', 'masked', 'alpha_W1', 'num_weights', 'ridge_lambda', 'alphabeta_ridge', 'mu_alpha', 'mu_beta'))
+def compute_nll(hyperparams, inputs, outputs, rewards, nln, inference_model, batched,
+                lengths=None, masked=False, train_mask=None, alpha_W1=None, num_weights=9,
                 ridge_lambda=0., alphabeta_ridge=0., mu_alpha=0., mu_beta=0.):
     N = len(hyperparams)
-    nll = None 
+    nll = None
+    # `masked` is a static (compile-time) flag, so we pick the branch at trace time
+    # with a plain Python if/elif/else. This avoids lax.cond tracing the train-mask
+    # branch when train_mask is None (the plain single-animal case).
     if batched:
         nlls, _, _ = batched_run_forward_learning_trajectory(hyperparams, inputs, outputs, rewards, lengths, nln, inference_model, alpha_W1)
         nll = jnp.mean(nlls)
+    elif masked:
+        # train/test split: score only the training trials (train_mask: True = train)
+        nll = run_train_test_single_learning_forward_trajectory(hyperparams, inputs, outputs, rewards, train_mask, nln, inference_model, alpha_W1)[0]
     else:
-        def train_nll(_):
-            return run_train_test_single_learning_forward_trajectory(hyperparams, inputs, outputs, rewards, train_mask, nln, inference_model, alpha_W1)[0]
-
-        def normal_nll(_):
-            return run_single_learning_forward_trajectory(hyperparams, inputs, outputs, rewards, nln, inference_model, alpha_W1)[0]
-
-        nll = lax.cond(masked, train_nll, normal_nll, operand=None)
+        nll = run_single_learning_forward_trajectory(hyperparams, inputs, outputs, rewards, nln, inference_model, alpha_W1)[0]
 
     l2_prior = ridge_lambda * jnp.sum(hyperparams[-num_weights:]**2) + alphabeta_ridge * jnp.sum((hyperparams[:N-num_weights-1] - mu_alpha)**2) + alphabeta_ridge * (hyperparams[N-num_weights-1] - mu_beta)**2
     nll += l2_prior
@@ -201,8 +216,8 @@ def compute_nll(hyperparams, inputs, outputs, rewards, nln, inference_model, bat
     return nll
 
 
-@partial(jit, static_argnames=('nln','inference_model','batched', 'alpha_W1', 'num_weights', 'ridge_lambda', 'alphabeta_ridge', 'mu_alpha', 'mu_beta'))
-def compute_hessian(hyperparams, inputs, outputs, rewards, nln, inference_model, batched, 
+@partial(jit, static_argnames=('nln','inference_model','batched', 'masked', 'alpha_W1', 'num_weights', 'ridge_lambda', 'alphabeta_ridge', 'mu_alpha', 'mu_beta'))
+def compute_hessian(hyperparams, inputs, outputs, rewards, nln, inference_model, batched,
                     lengths=None, masked=False, train_mask=None, alpha_W1=None, num_weights=9, 
                     ridge_lambda=0., alphabeta_ridge=0., mu_alpha=0., mu_beta=0.):
     hess_fn = jax.hessian(compute_nll)
@@ -242,7 +257,7 @@ def optax_fit_params(init_hyperparams, inputs, outputs, rewards, nln, inference_
         _, state = carry
         iter_num = otu.tree_get(state, 'count')
         grad = otu.tree_get(state, 'grad')
-        err = otu.tree_l2_norm(grad)
+        err = otu.tree_norm(grad)
 
         finite = jnp.isfinite(err)
         
@@ -328,7 +343,7 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, depth, 
 
         iter_count = int(otu.tree_get(final_state, 'count'))
         grad = otu.tree_get(final_state, 'grad')
-        grad_norm = otu.tree_l2_norm(grad)
+        grad_norm = otu.tree_norm(grad)
 
         converged = (grad_norm <= tol)
 
@@ -512,7 +527,7 @@ def train_test_exploration():
 
 if __name__ == "__main__":
     train_test_exploration()
-    print(1./0)
+    # print(1./0)
     # test out batched inference procedure on a synthetic dataset and a ground truth network with known hyperparameters, and visualize the inferred vs true effective weight trajectories
     key = jr.PRNGKey(38)
     keys = jr.split(key, 5)
