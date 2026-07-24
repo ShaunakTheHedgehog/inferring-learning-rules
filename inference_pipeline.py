@@ -10,6 +10,10 @@ import optax.tree_utils as otu
 from functools import partial
 import numpy as np
 
+# optax renamed `tree_l2_norm` -> `tree_norm` in v0.2.5; support both so this runs
+# on older and newer optax without a deprecation warning or an AttributeError.
+_tree_l2_norm = getattr(otu, "tree_norm", None) or otu.tree_l2_norm
+
 import matplotlib.pyplot as plt
 
 from metric_GD_network import generate_randomized_multisession_graded_data, generate_metric_GD_train_test_split
@@ -257,7 +261,7 @@ def optax_fit_params(init_hyperparams, inputs, outputs, rewards, nln, inference_
         _, state = carry
         iter_num = otu.tree_get(state, 'count')
         grad = otu.tree_get(state, 'grad')
-        err = otu.tree_norm(grad)
+        err = _tree_l2_norm(grad)
 
         finite = jnp.isfinite(err)
         
@@ -343,7 +347,7 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, depth, 
 
         iter_count = int(otu.tree_get(final_state, 'count'))
         grad = otu.tree_get(final_state, 'grad')
-        grad_norm = otu.tree_norm(grad)
+        grad_norm = _tree_l2_norm(grad)
 
         converged = (grad_norm <= tol)
 
