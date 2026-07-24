@@ -56,6 +56,57 @@ def make_train_mask(num_trials, block_length=20, test_fraction=0.1):
         mask[start:end] = False
     return mask
 
+
+def make_kfold_train_masks(num_trials, key, K=5, block_length=20):
+    '''
+    Partition the trials into K disjoint, exhaustive cross-validation folds made up of
+    contiguous blocks of `block_length` trials, and return one training mask per fold.
+
+    Blocks are randomly assigned to folds (via `key`), so each fold's held-out trials are
+    scattered across the whole learning trajectory rather than concentrated in one epoch.
+    Fold sizes differ by at most one block, and every trial is held out in exactly one fold,
+    so summing the K held-out NLLs and dividing by `num_trials` gives the cross-validated
+    NLL per trial.
+
+    Arguments:
+    num_trials   : total number of trials for this animal
+    key          : JAX PRNG key controlling the (reproducible) block-to-fold assignment.
+                   Pass the same key across model classes so all models are scored on
+                   identical folds, making model comparisons paired.
+    K            : number of folds (each holds out ~1/K of the trials)
+    block_length : number of contiguous trials per block
+
+    Returns:
+    a list of K boolean arrays of shape (num_trials,), where entry k is the training mask
+    for fold k: True indicates a training trial and False indicates a held-out test trial
+    (same convention as `make_train_mask`)
+    '''
+    num_blocks = math.ceil(num_trials / block_length)
+    assert num_blocks >= K, (
+        f'Need at least K={K} blocks to form K non-empty folds, but num_trials={num_trials} '
+        f'with block_length={block_length} gives only {num_blocks} blocks. Folds without any '
+        f'held-out trials would silently contribute a test NLL of 0.'
+    )
+
+    # randomly assign blocks to folds; array_split gives K groups whose sizes differ by <= 1 block
+    block_order = jr.permutation(key, num_blocks)
+    fold_blocks = jnp.array_split(block_order, K)
+
+    # map each block to its fold, then each trial to its block's fold
+    block_to_fold = jnp.zeros(num_blocks, dtype=jnp.int32)
+    for k, blocks in enumerate(fold_blocks):
+        block_to_fold = block_to_fold.at[blocks].set(k)
+
+    trial_folds = block_to_fold[jnp.arange(num_trials) // block_length]
+
+    # fold k trains on every trial NOT assigned to fold k
+    return [trial_folds != k for k in range(K)]
+
+# xs = make_kfold_train_masks(13678, key=jr.PRNGKey(1), K=5, block_length=20)
+# for x in xs:
+#     # print(x.astype(int))
+#     print(x.sum() / len(x))
+
 # mask = make_train_mask(13_762, block_length=20, test_fraction=0.1)
 # num_trains = np.sum(mask)
 # num_tests = np.sum(~mask)
