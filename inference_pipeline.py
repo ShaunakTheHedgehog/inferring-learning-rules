@@ -313,11 +313,12 @@ def run_epsilon_ball_test(hyperparams_arr, inputs, outputs, rewards, key, nln, i
 
 def run_randomized_optimization_procedure(inputs, outputs, rewards, key, depth, nln, inference_model, batched, lengths=None,
                                           masked=False, train_mask=None, alpha_W1=None, num_seeds=25, max_iters=500, tol=1e-4,
-                                          alpha_init_scale=1e-1, beta_init_scale=1e0, w0_init_scale=1e-1,
+                                          alpha_init_scale=1e-2, beta_init_scale=5e0, w0_init_scale=1e-1,
                                           alpha_init_guess=None, beta_init_guess=None, w0_init_guess=None,
                                           noise_level=0.01, epsilon_seeds=25, epsilon=0.01, ridge_lambda=0.,
                                           alphabeta_ridge=0., mu_alpha=0., mu_beta=0., 
-                                          explode_tol=1e7, burn_in_iters=1_000):
+                                          explode_tol=1e7, burn_in_iters=1_000, print_grad_and_hessian=False):
+
     
     num_alphas = get_num_alphas(inference_model, depth)
 
@@ -326,7 +327,10 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, depth, 
     bad_run_idxs = []
 
     num_weights = DEPTH_TO_NUM_WEIGHTS[depth]
-    print(f'num weights in model: {num_weights}')
+    print(f'Number of weights in model: {num_weights}', flush=True)
+    print(f'Running {num_seeds} optimization seeds, with max_iters={max_iters}. Using ridge_lambda={ridge_lambda}, alphabeta_ridge={alphabeta_ridge}.', flush=True)
+    print(f'Using mu_alpha={mu_alpha}, mu_beta={mu_beta}.', flush=True)
+    print(f'Using explode_tol={explode_tol}, burn_in_iters={burn_in_iters}.', flush=True)
 
     min_objective_val = None 
     best_w0 = None 
@@ -356,15 +360,15 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, depth, 
         objective_vals.append(inferred_objective_val)
 
         # run epsilon-ball test at candidate local optimum
-        _, _, result = run_epsilon_ball_test(hyperparams_arr, inputs, outputs, rewards, test_key, nln, inference_model, batched, lengths=lengths,
-                                             masked=masked, train_mask=train_mask, alpha_W1=alpha_W1, num_samples=epsilon_seeds, epsilon=epsilon, 
-                                             num_weights=num_weights, ridge_lambda=ridge_lambda, alphabeta_ridge=alphabeta_ridge, 
-                                             mu_alpha=mu_alpha, mu_beta=mu_beta)
+        # _, _, result = run_epsilon_ball_test(hyperparams_arr, inputs, outputs, rewards, test_key, nln, inference_model, batched, lengths=lengths,
+        #                                      masked=masked, train_mask=train_mask, alpha_W1=alpha_W1, num_samples=epsilon_seeds, epsilon=epsilon, 
+        #                                      num_weights=num_weights, ridge_lambda=ridge_lambda, alphabeta_ridge=alphabeta_ridge, 
+        #                                      mu_alpha=mu_alpha, mu_beta=mu_beta)
 
         # compute gradient and Hessian eigenvalues at candidate local optimum
         eigvals = None 
         grad = None
-        if not jnp.isnan(inferred_objective_val):
+        if print_grad_and_hessian and not jnp.isnan(inferred_objective_val):
             _, eigvals = compute_hessian(hyperparams_arr, inputs, outputs, rewards, nln, inference_model, batched, lengths=lengths, 
                                          masked=masked, train_mask=train_mask,
                                          alpha_W1=alpha_W1, num_weights=num_weights, ridge_lambda=ridge_lambda,
@@ -374,32 +378,24 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, depth, 
                                          masked=masked, train_mask=train_mask,
                                          alpha_W1=alpha_W1, num_weights=num_weights, ridge_lambda=ridge_lambda,
                                          alphabeta_ridge=alphabeta_ridge, mu_alpha=mu_alpha, mu_beta=mu_beta)
-            
-            # kwargs = dict(inputs=inputs, outputs=outputs, rewards=rewards, nln=nln,
-            #   inference_model=inference_model, batched=batched,
-            #   alpha_W1=alpha_W1, num_weights=num_weights, ridge_lambda=ridge_lambda,
-            #   alphabeta_ridge=alphabeta_ridge, mu_alpha=mu_alpha, mu_beta=mu_beta)
-            # g_fd = finite_diff_gradient(hyperparams_arr, 1e-6, **kwargs)
-            # g_fd_norm = float(jnp.linalg.norm(g_fd))
-            # relative_g = g_fd_norm / (abs(float(inferred_nll)) + 1e-8)
-            # print(f'Norm check. FD grad: {g_fd}, Relative grad strength: {relative_g}')
+        
 
         # Print results from current optimization seed
-        print(f'Iter {i+1} Inferred Objective Value: {inferred_objective_val} \nGradient: {grad} \nHessian eigvals: {eigvals}')
-        print(f'Iterations: {iter_count}/{max_iters}')
-        print(f'Converged: {converged}')
-        print(f'Epsilon-ball test result: {result}') # if desired, can also print f'Nearby NLLs: {nearby_nlls}'
-        print('\n')
+        print(f'Iter {i+1} Inferred Objective: {inferred_objective_val}', flush=True)
+        print(f'Iterations: {iter_count}/{max_iters}', flush=True)
+        print(f'Converged: {converged}', flush=True)
+        # print(f'Epsilon-ball test result: {result}', flush=True) 
+        print('\n', flush=True)
 
         curr_alphas = jnp.exp(hyperparams_arr[:num_alphas])
         curr_beta = jnp.exp(hyperparams_arr[num_alphas])
 
-        print(f'Inferred alpha: {curr_alphas}, Inferred beta: {curr_beta}')
+        print(f'Inferred alpha: {curr_alphas}, Inferred beta: {curr_beta}', flush=True)
         if depth == 'two-layer':
             print(f'Inferred W1_diag_0: {hyperparams_arr[num_alphas+1:num_alphas+4]}, Inferred W2_0: {hyperparams_arr[num_alphas+4:].reshape((2, 3))}')
         else:
             print(f'Inferred W_0: {hyperparams_arr[num_alphas+1:].reshape((2, 3))}')
-        print('\n\n')
+        print('\n')
 
         # update min_nll if you find a well-defined, lower nll than the current best AND if the optimizer converged
         if ((min_objective_val is None and not jnp.isnan(inferred_objective_val)) or (not jnp.isnan(inferred_objective_val) and inferred_objective_val < min_objective_val)) and converged:
@@ -413,17 +409,17 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, depth, 
     all_hyperparams = jnp.asarray(all_hyperparams)
     objective_vals = jnp.asarray(objective_vals)
 
-    print(f'Min Objective Value: {min_objective_val}')
+    print(f'Min Objective Value: {min_objective_val}', flush=True)
 
     if len(bad_run_idxs) > 0:
         bad_run_idxs = jnp.asarray(bad_run_idxs)
         bad_nlls = objective_vals[bad_run_idxs]
-        print(f'min BAD objective value: {jnp.min(bad_nlls)}')
+        print(f'min BAD objective value: {jnp.min(bad_nlls)}', flush=True)
 
-        if jnp.min(bad_nlls) < min_objective_val:
-            print('OPTIMIZATION ERROR. BAD SMALLER OBJECTIVE VALUE FOUND.')
+        if min_objective_val is None or (jnp.min(bad_nlls) < min_objective_val):
+            print('OPTIMIZATION ERROR. BAD SMALLER OBJECTIVE VALUE FOUND.', flush=True)
     else:
-        print('SUCCESS. NO BAD OBJECTIVE VALUES FOUND.')
+        print('SUCCESS. NO BAD OBJECTIVE VALUES FOUND.', flush=True)
 
     return best_w0, min_objective_val, best_hyperparams_arr, {'hyperparams': all_hyperparams, 'nlls' : objective_vals, 'bad_run_idxs': bad_run_idxs}
 
