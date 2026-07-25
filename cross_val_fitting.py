@@ -42,9 +42,9 @@ from inference_pipeline import (
 
 # model class name -> (inference_model, depth, nln_name), matching globals.MODEL_CLASS_INFO
 MODEL_CLASSES = {
-    '1layer_linear':    ('gd', 'one-layer', 'linear'),
-    '2layer_linear':    ('gd', 'two-layer', 'linear'),
-    '2layer_nonlinear': ('gd', 'two-layer', 'erf'),
+    '1L':    ('gd', 'one-layer', 'linear'),
+    '2L':    ('gd', 'two-layer', 'linear'),
+    '2NL': ('gd', 'two-layer', 'erf'),
 }
 
 
