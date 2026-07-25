@@ -12,14 +12,15 @@ trials out of the state-update dynamics would score the model from a state it ne
 actually occupied.
 
 Usage:
-    # explicit (mouse, fold)
-    python cross_val_fitting.py --model 2layer_nonlinear --mouse_id 13 --fold 0
+    # explicit (mouse, fold); --model is one of 1L (1-layer linear), 2L (2-layer
+    # linear), 2NL (2-layer nonlinear/erf) -- see MODEL_CLASSES below
+    python cross_val_fitting.py --model 2NL --mouse_id 13 --fold 0
 
     # or let a SLURM array index choose the (mouse, fold) pair
-    python cross_val_fitting.py --model 2layer_nonlinear --task_id $SLURM_ARRAY_TASK_ID
+    python cross_val_fitting.py --model 2NL --task_id $SLURM_ARRAY_TASK_ID
 
     # fast end-to-end smoke test (tiny fitting budget)
-    python cross_val_fitting.py --model 1layer_linear --task_id 0 --dry_run
+    python cross_val_fitting.py --model 1L --task_id 0 --dry_run
 """
 import argparse
 import os
@@ -32,7 +33,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 
-from globals import MU_ALPHA, MU_BETA, RIDGE_LAMBDA, RIDGE_ALPHABETA, DEPTH_TO_NUM_WEIGHTS
+from globals import MU_ALPHA, MU_BETA, RIDGE_LAMBDA, RIDGE_ALPHABETA
 from utils import get_nonlinearity, make_kfold_train_masks
 from inference_utils import convert_weights_to_dict, get_num_alphas
 from inference_pipeline import (
@@ -42,8 +43,8 @@ from inference_pipeline import (
 
 # model class name -> (inference_model, depth, nln_name), matching globals.MODEL_CLASS_INFO
 MODEL_CLASSES = {
-    '1L':    ('gd', 'one-layer', 'linear'),
-    '2L':    ('gd', 'two-layer', 'linear'),
+    '1L':  ('gd', 'one-layer', 'linear'),
+    '2L':  ('gd', 'two-layer', 'linear'),
     '2NL': ('gd', 'two-layer', 'erf'),
 }
 
@@ -66,6 +67,36 @@ def get_mouse_arrays(mouse_dict):
     outputs = jnp.asarray(mouse_dict['outputs']).astype(jnp.int32)
     rewards = jnp.asarray(mouse_dict['rewards'], dtype=jnp.float64)
     return inputs, outputs, rewards
+
+
+def check_writable(directory):
+    """Fail fast if `directory` is not writable.
+
+    Called before fitting starts: a bad path or an exhausted disk quota should cost a
+    second, not a multi-hour job that dies at the final `pkl.dump`.
+    """
+    probe = os.path.join(directory, f'.writetest_{os.getpid()}')
+    try:
+        with open(probe, 'wb') as f:
+            f.write(b'ok')
+        os.remove(probe)
+    except OSError as e:
+        raise SystemExit(f'ERROR: cannot write results to {directory}: {e}')
+
+
+def to_numpy(obj):
+    """Recursively convert JAX arrays to NumPy inside containers.
+
+    Saved records are then plain NumPy/Python objects, so they load anywhere without
+    JAX installed and do not depend on JAX's pickle format staying stable.
+    """
+    if isinstance(obj, jnp.ndarray):
+        return np.asarray(obj)
+    if isinstance(obj, dict):
+        return {k: to_numpy(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(to_numpy(v) for v in obj)
+    return obj
 
 
 def build_task_list(mouse_ids, K):
@@ -221,7 +252,11 @@ def main():
     # fold_seed is part of the filename: a different seed is a different partition, so
     # results from separate seeds (repeated K-fold) must not silently collide.
     out_dir = os.path.join(args.out_dir, args.model, f'mouse_{mouse_id}')
-    os.makedirs(out_dir, exist_ok=True)
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as e:
+        raise SystemExit(f'ERROR: cannot create output directory {out_dir}: {e}')
+    check_writable(out_dir)  # fail before fitting, not after a multi-hour run
     out_path = os.path.join(out_dir, f'fold_{fold}_foldseed_{args.fold_seed}.pkl')
     if os.path.exists(out_path) and not args.overwrite:
         print(f'{out_path} already exists; use --overwrite to refit. Exiting.', flush=True)
@@ -271,6 +306,8 @@ def main():
         elapsed_sec=elapsed,
         **result,
     )
+    record = to_numpy(record)  # drop JAX arrays -> loads anywhere, independent of JAX version
+
     # write to a temp file then rename, so a job killed mid-write (e.g. by a SLURM time
     # limit) cannot leave a half-written pickle for a later aggregation step to choke on
     tmp_path = f'{out_path}.tmp{os.getpid()}'
