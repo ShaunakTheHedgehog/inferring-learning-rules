@@ -49,10 +49,9 @@ MODEL_CLASSES = {
 }
 
 
-def load_mouse_data(dataset_name, data_root='.'):
+def load_mouse_data(dataset_name):
     """Load the per-mouse behavioral dict (same file as mouse_inference_data_analysis.load_data)."""
-    path = os.path.join(data_root, f'{dataset_name}_data_GD_analysis_final',
-                        f'{dataset_name}_mouse_data.pkl')
+    path = f'{dataset_name}_mouse_data.pkl'
     with open(path, 'rb') as f:
         return pkl.load(f)
 
@@ -218,7 +217,7 @@ def main():
                    help='tiny fitting budget for a fast end-to-end smoke test')
     args = p.parse_args()
 
-    all_data = load_mouse_data(args.dataset, args.data_root)
+    all_data = load_mouse_data(args.dataset)
     mouse_ids = sorted(all_data.keys())
     tasks = build_task_list(mouse_ids, args.K)
 
