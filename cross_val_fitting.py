@@ -34,7 +34,7 @@ import jax.random as jr
 import numpy as np
 
 from globals import MU_ALPHA, MU_BETA, RIDGE_LAMBDA, RIDGE_ALPHABETA
-from utils import get_nonlinearity, make_kfold_train_masks
+from utils import get_nonlinearity, make_kfold_train_masks, tanh_p
 from inference_utils import convert_weights_to_dict, get_num_alphas
 from inference_pipeline import (
     run_randomized_optimization_procedure,
@@ -181,6 +181,8 @@ def main():
                    help='SLURM array index; maps to a (mouse, fold) pair via build_task_list')
     p.add_argument('--list_tasks', action='store_true',
                    help='print the number of array tasks (mice x K) and exit')
+    p.add_argument("--saturate_inputs", action="store_true",
+                           help="apply tanh(5c)/tanh(5) contrast normalization ")
 
     # cross-validation setup
     p.add_argument('--K', type=int, default=5, help='number of CV folds')
@@ -251,7 +253,12 @@ def main():
 
     # fold_seed is part of the filename: a different seed is a different partition, so
     # results from separate seeds (repeated K-fold) must not silently collide.
-    out_dir = os.path.join(args.out_dir, args.model, f'mouse_{mouse_id}')
+    base_folder = args.out_dir
+    if args.saturate_inputs:
+        base_folder = f'{args.out_dir}_sat_inputs'
+        print(f'Will save to folder: {base_folder}', flush=True)
+
+    out_dir = os.path.join(base_folder, args.model, f'mouse_{mouse_id}')
     try:
         os.makedirs(out_dir, exist_ok=True)
     except OSError as e:
@@ -264,6 +271,11 @@ def main():
 
     inputs, outputs, rewards = get_mouse_arrays(all_data[mouse_id])
     T = int(outputs.shape[0])
+
+    # apply front-end saturating nonlinearity if specified
+    if args.saturate_inputs:
+        print(f'Using saturating nonlinearity on inputs', flush=True)
+        inputs = tanh_p(inputs)
 
     # The fold key is derived from (fold_seed, mouse_id), so each mouse gets its own
     # partition draw while every task for that mouse -- all K folds, all model classes --
@@ -295,7 +307,7 @@ def main():
     record = dict(
         # identity
         dataset=args.dataset, mouse_id=mouse_id, model=args.model,
-        inference_model=inference_model, depth=depth, nln_name=nln_name,
+        inference_model=inference_model, depth=depth, nln_name=nln_name, saturate_inputs=args.saturate_inputs,
         # fold metadata (enough to reproduce the split exactly)
         fold=fold, K=args.K, block_length=args.block_length, fold_seed=args.fold_seed,
         train_mask=np.asarray(train_mask), num_trials=T, n_train=n_train, n_test=n_test,
