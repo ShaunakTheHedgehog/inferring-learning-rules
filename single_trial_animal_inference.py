@@ -12,17 +12,16 @@ import argparse
 
 import matplotlib.pyplot as plt
 
-from utils import get_nonlinearity, calculate_simple_mouse_ma_bias, compute_rightward_statistics
+from utils import get_nonlinearity, calculate_simple_mouse_ma_bias, compute_rightward_statistics, tanh_p
 from inference_utils import get_num_alphas
 from inference_pipeline import run_randomized_optimization_procedure
 from globals import *
 
 
-def single_trial_mouse_data_validation(dataset_name, mouse_behav_dict, inference_model, depth, nln, key, num_seeds=100, max_iters=10_000, tol=1e-3,
+def single_trial_mouse_data_validation(dataset_name, mouse_behav_dict, inference_model, depth, nln, key, num_seeds=200, max_iters=2_000, tol=1e-3,
                                        fixed_alpha_W1=None, alpha_init_scale=1e-2, beta_init_scale=5e0, w0_init_scale=1e-1, 
-                                       num_epsilon_seeds=100, epsilon=1e-4,
-                                       ridge_lambda=0.5, alphabeta_ridge=0.5, mu_alpha=float(jnp.log(0.001)), mu_beta=0.,
-                                       explode_tol=1e7, burn_in_iters=1_000):
+                                       ridge_lambda=0.5, alphabeta_ridge=0.5, mu_alpha=MU_ALPHA, mu_beta=MU_BETA,
+                                       explode_tol=1e7, burn_in_iters=1_000, saturate=False):
     assert inference_model in ['gd', 'full_metric_gd', 'pathway_metric_gd', 'fixed_metric_gd']
     assert depth in ['two-layer', 'one-layer']
     assert dataset_name in ['witten', 'saxe']
@@ -39,6 +38,8 @@ def single_trial_mouse_data_validation(dataset_name, mouse_behav_dict, inference
     inferred_hyperparams_collection = np.zeros(total_num_hyperparams)
 
     inputs = mouse_behav_dict['inputs']
+    if saturate:
+        inputs = tanh_p(inputs)
     
     outputs = mouse_behav_dict[DATASET_TO_CHOICE_KEYWORD[dataset_name]].astype(jnp.int32)
         
@@ -47,7 +48,6 @@ def single_trial_mouse_data_validation(dataset_name, mouse_behav_dict, inference
     inferred_w0, min_nll, inferred_hyperparams, optim_dict = run_randomized_optimization_procedure(inputs, outputs, rewards, skey, depth, nln, inference_model, batched=False,
                                                 alpha_W1=fixed_alpha_W1, num_seeds=num_seeds, max_iters=max_iters, tol=tol,
                                                 alpha_init_scale=alpha_init_scale, beta_init_scale=beta_init_scale, w0_init_scale=w0_init_scale,
-                                                alpha_init_guess=None, beta_init_guess=None, w0_init_guess=None, epsilon_seeds=num_epsilon_seeds, epsilon=epsilon, 
                                                 ridge_lambda=ridge_lambda, alphabeta_ridge=alphabeta_ridge, mu_alpha=mu_alpha, mu_beta=mu_beta,
                                                 explode_tol=explode_tol, burn_in_iters=burn_in_iters)
     
@@ -72,12 +72,14 @@ if __name__ == "__main__":
     parser.add_argument('--nln_type', type=str, default='linear')
     parser.add_argument('--depth', type=str, default='two-layer')
     parser.add_argument('--inference_model', type=str, default='gd')
+    parser.add_argument("--saturate_inputs", action="store_true",
+                       help="apply tanh(5c)/tanh(5) contrast normalization ")
     
     parser.add_argument('--ridge_lambda', type=float, default=0.5)
     parser.add_argument('--alphabeta_ridge', type=float, default=0.5)
     
-    parser.add_argument('--num_opt_seeds', type=int, default=100)
-    parser.add_argument('--max_iters', type=int, default=10000)
+    parser.add_argument('--num_opt_seeds', type=int, default=200)
+    parser.add_argument('--max_iters', type=int, default=2_000)
 
     parser.add_argument('--dataset', type=str, default='witten')
     parser.add_argument('--filepath', type=str)
@@ -129,7 +131,7 @@ if __name__ == "__main__":
     try:
         nll, AIC, inferred_hyperparams, inferred_w0, optim_dict = single_trial_mouse_data_validation(dataset_name, mouse_behav_dict, inference_model, depth, nln, key, 
                                                                             num_seeds=num_opt_seeds, max_iters=max_iters, ridge_lambda=ridge_lambda, alphabeta_ridge=alphabeta_ridge,
-                                                                            mu_alpha=MU_ALPHA, mu_beta=MU_BETA, explode_tol=1e8, burn_in_iters=5_000)
+                                                                            mu_alpha=MU_ALPHA, mu_beta=MU_BETA, explode_tol=1e7, burn_in_iters=1_000, saturate=args.saturate_inputs)
     except Exception as e:
         print(f"Error processing mouse {mouse_id}: {e}", flush=True)
         nll, AIC, inferred_hyperparams, optim_dict = None, None, None, None
@@ -140,7 +142,8 @@ if __name__ == "__main__":
     
     mouse_results = {'mouse_id' : mouse_id, 'inputs' : inputs, 'outputs' : outputs, 'rewards' : rewards,
                      'ma_bias' : ma_bias, 'session_accs' : session_accs, 'rightward_stats' : rightward_stats,
-                     'nll' : nll, 'AIC' : AIC, 'inferred_hyperparams' : inferred_hyperparams, 'optim_dict' : optim_dict}
+                     'nll' : nll, 'AIC' : AIC, 'inferred_hyperparams' : inferred_hyperparams, 'optim_dict' : optim_dict,
+                     'saturate_inputs': args.saturate_inputs}
 
     with open(f'{filepath}/mouse_{mouse_id}_results_{depth}_{inference_model}_{nln_name}.pkl', 'wb') as f:
         pkl.dump(mouse_results, f)
