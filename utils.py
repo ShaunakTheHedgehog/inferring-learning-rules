@@ -26,6 +26,10 @@ from scipy.optimize import curve_fit
 from globals import NUM_GRADING_LEVELS
 
 
+def tanh_p(x, p=5.):
+    return jnp.tanh(p * x) / jnp.tanh(p)
+
+
 def pad_sequence(arr, target_len):
     pad_width = [(0, target_len - arr.shape[0])] + [(0, 0)] * (arr.ndim - 1)
     return jnp.pad(arr, pad_width)

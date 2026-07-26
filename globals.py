@@ -35,6 +35,8 @@ MU_BETA = float(jax.numpy.log(1e0))
 
 DATASET_TO_CHOICE_KEYWORD = {'witten': 'outputs', 'saxe': 'choices'}
 
+MODELS = ['1L', '2L', '2NL']
+
 MODEL_CLASS_INFO = {'1-Layer Linear': ['gd', 'one-layer', 'linear', NUM_ONE_LAYER_WEIGHTS+2, 'blue'], 
                     '2-Layer Linear': ['gd', 'two-layer', 'linear', NUM_TWO_LAYER_WEIGHTS+2, 'orange'],
                     '2-Layer Nonlinear': ['gd', 'two-layer', 'erf', NUM_TWO_LAYER_WEIGHTS+2, 'green']}
