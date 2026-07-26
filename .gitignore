@@ -17,6 +17,9 @@ ENV/
 # Ignore large support folder used for figures and data
 /alex_figure_1_4_supp_1/
 
+# Other directories
+psytrack_learning/
+
 # Ignore the example training script explicitly (keep it untracked)
 /examples/train_metric_gd_example.py
 train_metric_gd_example.py
