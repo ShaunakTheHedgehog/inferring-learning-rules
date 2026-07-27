@@ -513,9 +513,9 @@ def main():
     p.add_argument("--data_path", default=DEFAULT_DATA_PATH)
     p.add_argument("--no_sigday", action="store_true",
                    help="ignore session boundaries (do not fit sigDay)")
-    p.add_argument("--normalize", action="store_true",
-                   help="apply tanh(5c)/tanh(5) contrast normalization "
-                        "(higher evidence, far saner weight scale)")
+    # p.add_argument("--normalize", action="store_true",
+    #                help="apply tanh(5c)/tanh(5) contrast normalization "
+    #                     "(higher evidence, far saner weight scale)")
     p.add_argument("--plot", action="store_true",
                    help="show weight / performance / bias plots")
     p.add_argument("--show_opt", type=int, default=0,
@@ -546,12 +546,11 @@ def main():
         use_sigday=not args.no_sigday,
         plot=args.plot,
         show_opt=args.show_opt,
-        normalize=args.normalize,
     )
 
     if args.out_dir is not None:
         save_results(results, mouse_id, args.out_dir,
-                     use_sigday=not args.no_sigday, normalize=args.normalize)
+                     use_sigday=not args.no_sigday, normalize=False)
 
 
 if __name__ == "__main__":
