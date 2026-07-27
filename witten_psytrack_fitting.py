@@ -52,8 +52,6 @@ import numpy as np
 import psytrack as psy
 from psytrack.getMAP import getPosteriorTerms
 from psytrack.helper.helperFunctions import read_input
-import psytrack_learning as psyl
-
 
 DEFAULT_DATA_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "witten_mouse_data.pkl"
