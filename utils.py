@@ -26,6 +26,12 @@ from scipy.optimize import curve_fit
 from globals import NUM_GRADING_LEVELS
 
 
+def flip_outputs(y):
+    assert y.ndim == 1
+    flipped = 1 - y
+    return flipped.astype(int)
+
+
 def tanh_p(x, p=5.):
     return jnp.tanh(p * x) / jnp.tanh(p)
 
