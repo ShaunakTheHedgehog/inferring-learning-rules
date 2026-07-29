@@ -16,11 +16,10 @@ _tree_l2_norm = getattr(otu, "tree_norm", None) or otu.tree_l2_norm
 
 import matplotlib.pyplot as plt
 
-from metric_GD_network import generate_randomized_multisession_graded_data, generate_metric_GD_train_test_split
 from inference_utils import (apply_learning_updates, convert_weights_to_dict, generate_init_hyperparams,
                              get_depth, get_num_alphas, log_likelihood, model_forward,
                              squared_error_loss_fn, train_gd_network, unpack_hyperparams)
-from utils import get_nonlinearity, calculate_running_avg_quantity, calculate_batched_quantity_per_session, generate_batched_randomized_multisession_graded_data, pad_sequence, make_train_mask, flatten_params
+from utils import get_nonlinearity, make_train_mask, flatten_params, generate_randomized_multisession_graded_data
 from globals import DEPTH_TO_NUM_WEIGHTS, MU_ALPHA, MU_BETA
 
 
