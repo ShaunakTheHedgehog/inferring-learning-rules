@@ -71,11 +71,11 @@ import pytest
 
 from reinforce_pipeline import (
     NUM_WEIGHTS, REINFORCE_MODELS, get_num_params, _tree_l2_norm,
-    unpack_reinforce_hyperparams, log_likelihood, generate_init_hyperparams,
-    run_single_learning_forward_trajectory,
-    run_train_test_single_reinforce_forward_trajectory,
-    compute_objective, compute_hessian, optax_fit_params,
-    run_epsilon_ball_test, run_randomized_optimization_procedure,
+    unpack_RF_hyperparams, RF_log_likelihood, generate_RF_init_hyperparams,
+    run_single_RF_learning_forward_trajectory,
+    run_train_test_single_RF_forward_trajectory,
+    compute_RF_objective, compute_RF_hessian, optax_fit_RF_params,
+    run_RF_epsilon_ball_test, run_RF_randomized_optimization_procedure,
     plot_weight_trajectory,
 )
 
@@ -163,7 +163,7 @@ def best_hyperparams(best_hp, optim_dict):
 
 def trajectory_correlation(hp, model, X, y, r, true_ws):
     """Worst per-weight correlation between the fitted and true weight trajectories."""
-    _, ws_fit, _ = run_single_learning_forward_trajectory(hp, model, X, y, r)
+    _, ws_fit, _ = run_single_RF_learning_forward_trajectory(hp, model, X, y, r)
     ws_fit = np.asarray(ws_fit)
     with np.errstate(invalid='ignore'):
         return min(float(np.corrcoef(ws_fit[:, k], true_ws[:, k])[0, 1])
@@ -173,8 +173,8 @@ def trajectory_correlation(hp, model, X, y, r, true_ws):
 def perturbation_growth(model, hp, X, y, r, eps=1e-8):
     """Divergence of two rollouts whose w0 differ by `eps` -- the chaos probe."""
     hp2 = hp.at[-NUM_WEIGHTS:].add(eps)
-    _, w1, _ = run_single_learning_forward_trajectory(hp, model, X, y, r)
-    _, w2, _ = run_single_learning_forward_trajectory(hp2, model, X, y, r)
+    _, w1, _ = run_single_RF_learning_forward_trajectory(hp, model, X, y, r)
+    _, w2, _ = run_single_RF_learning_forward_trajectory(hp2, model, X, y, r)
     return float(jnp.max(jnp.abs(w1 - w2)))
 
 
@@ -197,45 +197,45 @@ class TestLayout:
     def test_unpack_broadcasts_everything_to_per_weight(self, model):
         """One update expression must cover every variant, so all outputs are (3,)."""
         hp = jnp.arange(float(get_num_params(model)))
-        alphas, intercepts, w0 = unpack_reinforce_hyperparams(hp, model)
+        alphas, intercepts, w0 = unpack_RF_hyperparams(hp, model)
         assert alphas.shape == intercepts.shape == w0.shape == (NUM_WEIGHTS,)
 
     @pytest.mark.parametrize("model", sorted(REINFORCE_MODELS))
     def test_w0_is_always_the_last_three_entries(self, model):
         """Required by the w0 ridge, which slices hyperparams[-NUM_WEIGHTS:]."""
         hp = jnp.arange(float(get_num_params(model)))
-        _, _, w0 = unpack_reinforce_hyperparams(hp, model)
+        _, _, w0 = unpack_RF_hyperparams(hp, model)
         assert np.allclose(w0, hp[-NUM_WEIGHTS:])
 
     def test_alphas_exponentiated_and_broadcast(self):
-        alphas, _, _ = unpack_reinforce_hyperparams(pack('RF_1', 0.01, 0.0, DEFAULT_W0), 'RF_1')
+        alphas, _, _ = unpack_RF_hyperparams(pack('RF_1', 0.01, 0.0, DEFAULT_W0), 'RF_1')
         assert np.allclose(alphas, 0.01)
 
     def test_per_weight_alphas_preserved(self):
         hp = pack('RF', [0.01, 0.02, 0.03], 0.0, DEFAULT_W0)
-        alphas, _, _ = unpack_reinforce_hyperparams(hp, 'RF')
+        alphas, _, _ = unpack_RF_hyperparams(hp, 'RF')
         assert np.allclose(alphas, [0.01, 0.02, 0.03])
 
     @pytest.mark.parametrize("model", ['RF_1', 'RF'])
     def test_baselines_zero_for_no_baseline_models(self, model):
         hp = jnp.arange(float(get_num_params(model)))
-        _, intercepts, _ = unpack_reinforce_hyperparams(hp, model)
+        _, intercepts, _ = unpack_RF_hyperparams(hp, model)
         assert np.allclose(intercepts, 0.0)
 
     def test_negative_baselines_survive(self):
         """Baselines are not log-parameterized, so they must be able to go negative --
         and Ashwood et al. report exactly that for real animals."""
         hp = pack('RF_b', [0.01, 0.02, 0.03], [0.8, -0.1, 0.5], DEFAULT_W0)
-        _, intercepts, _ = unpack_reinforce_hyperparams(hp, 'RF_b')
+        _, intercepts, _ = unpack_RF_hyperparams(hp, 'RF_b')
         assert np.allclose(intercepts, [0.8, -0.1, 0.5])
 
     def test_wrong_length_rejected(self):
         with pytest.raises(AssertionError):
-            unpack_reinforce_hyperparams(jnp.zeros(5), 'RF_1')
+            unpack_RF_hyperparams(jnp.zeros(5), 'RF_1')
 
     def test_unknown_model_rejected(self):
         with pytest.raises(AssertionError):
-            unpack_reinforce_hyperparams(jnp.zeros(4), 'RF_nope')
+            unpack_RF_hyperparams(jnp.zeros(4), 'RF_nope')
 
 
 # --------------------------------------------------------------------------- #
@@ -245,21 +245,21 @@ class TestLogLikelihood:
     def test_matches_log_sigmoid(self):
         for z in [-8.0, -1.0, 0.0, 1.0, 8.0]:
             p = 1.0 / (1.0 + np.exp(-z))
-            assert np.isclose(float(log_likelihood(jnp.asarray(z), 1)), np.log(p))
-            assert np.isclose(float(log_likelihood(jnp.asarray(z), 0)), np.log1p(-p))
+            assert np.isclose(float(RF_log_likelihood(jnp.asarray(z), 1)), np.log(p))
+            assert np.isclose(float(RF_log_likelihood(jnp.asarray(z), 0)), np.log1p(-p))
 
     def test_stable_at_extreme_logits(self):
         """The logaddexp form must not underflow where log(sigmoid(z)) would. This
         matters here because ||w|| carries the gain that beta carries in the GD models."""
         for z in [-800.0, 800.0]:
             for choice in (0, 1):
-                assert np.isfinite(float(log_likelihood(jnp.asarray(z), choice)))
+                assert np.isfinite(float(RF_log_likelihood(jnp.asarray(z), choice)))
 
     def test_non_positive_and_chance_at_zero(self):
         for z in [-3.0, 0.0, 3.0]:
             for choice in (0, 1):
-                assert float(log_likelihood(jnp.asarray(z), choice)) <= 0.0
-        assert np.isclose(float(log_likelihood(jnp.asarray(0.0), 1)), np.log(0.5))
+                assert float(RF_log_likelihood(jnp.asarray(z), choice)) <= 0.0
+        assert np.isclose(float(RF_log_likelihood(jnp.asarray(0.0), 1)), np.log(0.5))
 
 
 # --------------------------------------------------------------------------- #
@@ -268,13 +268,13 @@ class TestLogLikelihood:
 class TestInitialization:
     @pytest.mark.parametrize("model", sorted(REINFORCE_MODELS))
     def test_init_length(self, model):
-        hp = generate_init_hyperparams(model, 1e-2, 1e-1, 1e-1, jr.PRNGKey(0))
+        hp = generate_RF_init_hyperparams(model, 1e-2, 1e-1, 1e-1, jr.PRNGKey(0))
         assert hp.shape == (get_num_params(model),)
 
     def test_alphas_positive_baselines_zero_mean(self):
         """alpha is half-normal then logged (always > 0); b is zero-mean, so the
         baseline models start at their no-baseline special case (b = 0)."""
-        draws = jnp.stack([generate_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(s))
+        draws = jnp.stack([generate_RF_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(s))
                            for s in range(400)])
         na, nb = REINFORCE_MODELS['RF_b']
         assert bool(jnp.all(jnp.exp(draws[:, :na]) > 0))
@@ -284,24 +284,24 @@ class TestInitialization:
         assert 0.08 < float(intercepts.std()) < 0.12
 
     def test_reproducible_and_key_dependent(self):
-        a = generate_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(7))
-        b = generate_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(7))
-        c = generate_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(8))
+        a = generate_RF_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(7))
+        b = generate_RF_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(7))
+        c = generate_RF_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(8))
         assert np.allclose(a, b) and not np.allclose(a, c)
 
     def test_baseline_guess_of_zero_still_jitters(self):
         """The baseline guess is perturbed ADDITIVELY. A multiplicative jitter (as used
         for alpha and w0) around a guess of 0 would freeze every restart at 0."""
-        hp = generate_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(0),
+        hp = generate_RF_init_hyperparams('RF_b', 1e-2, 1e-1, 1e-1, jr.PRNGKey(0),
                                        c_init_guess=jnp.zeros(3), noise_level=0.01)
-        _, intercepts, _ = unpack_reinforce_hyperparams(hp, 'RF_b')
+        _, intercepts, _ = unpack_RF_hyperparams(hp, 'RF_b')
         assert bool(jnp.all(intercepts != 0.0)) and float(jnp.abs(intercepts).max()) < 0.05
 
     def test_alpha_and_w0_guesses_respected(self):
-        hp = generate_init_hyperparams('RF', 1e-2, 1e-1, 1e-1, jr.PRNGKey(0),
+        hp = generate_RF_init_hyperparams('RF', 1e-2, 1e-1, 1e-1, jr.PRNGKey(0),
                                        alpha_init_guess=jnp.full(3, 0.05),
                                        w0_init_guess=jnp.full(3, 0.4), noise_level=0.01)
-        alphas, _, w0 = unpack_reinforce_hyperparams(hp, 'RF')
+        alphas, _, w0 = unpack_RF_hyperparams(hp, 'RF')
         assert np.allclose(alphas, 0.05, rtol=0.1) and np.allclose(w0, 0.4, rtol=0.1)
 
 
@@ -311,20 +311,20 @@ class TestInitialization:
 class TestForwardTrajectory:
     def test_nll_equals_minus_sum_lls(self, small_data):
         X, y, r = small_data
-        nll, _, lls = run_single_learning_forward_trajectory(
+        nll, _, lls = run_single_RF_learning_forward_trajectory(
             pack('RF_1', 0.03, 0.0, DEFAULT_W0), 'RF_1', X, y, r)
         assert np.isfinite(float(nll))
         assert np.isclose(float(nll), float(-jnp.sum(lls)), atol=1e-8)
 
     def test_weight_trajectory_shape(self, small_data):
         X, y, r = small_data
-        _, ws, _ = run_single_learning_forward_trajectory(
+        _, ws, _ = run_single_RF_learning_forward_trajectory(
             pack('RF_1', 0.03, 0.0, DEFAULT_W0), 'RF_1', X, y, r)
         assert ws.shape == (X.shape[0], NUM_WEIGHTS)
 
     def test_zero_alpha_freezes_the_weights(self, small_data):
         X, y, r = small_data
-        _, ws, _ = run_single_learning_forward_trajectory(
+        _, ws, _ = run_single_RF_learning_forward_trajectory(
             pack('RF_1', 1e-300, 0.0, DEFAULT_W0), 'RF_1', X, y, r)
         assert np.allclose(np.asarray(ws), DEFAULT_W0[None, :])
 
@@ -336,23 +336,23 @@ class TestForwardTrajectory:
         true_intercept = true_alpha * true_beta
         X, y, r, ws_sim = simulate_reinforce_animal(true_alpha, true_intercept, DEFAULT_W0, T=2000, seed=0)
         hp = pack('RF_b_1', true_alpha, true_intercept, DEFAULT_W0)
-        _, ws_pipe, _ = run_single_learning_forward_trajectory(hp, 'RF_b_1', X, y, r)
+        _, ws_pipe, _ = run_single_RF_learning_forward_trajectory(hp, 'RF_b_1', X, y, r)
         # the pipeline carries w_new (post-update); the simulator stores w (pre-update)
         assert np.abs(np.asarray(ws_pipe)[:-1] - ws_sim[1:]).max() < 1e-12
 
     def test_train_plus_test_equals_total(self, small_data):
         X, y, r = small_data
         hp = pack('RF_1', 0.03, 0.0, DEFAULT_W0)
-        total, _, _ = run_single_learning_forward_trajectory(hp, 'RF_1', X, y, r)
+        total, _, _ = run_single_RF_learning_forward_trajectory(hp, 'RF_1', X, y, r)
         mask = jnp.asarray(np.random.default_rng(0).random(X.shape[0]) > 0.2)
-        tr, te, _, _ = run_train_test_single_reinforce_forward_trajectory(hp, 'RF_1', X, y, r, mask)
+        tr, te, _, _ = run_train_test_single_RF_forward_trajectory(hp, 'RF_1', X, y, r, mask)
         assert np.isclose(float(tr) + float(te), float(total), atol=1e-8)
 
     def test_all_train_mask_reproduces_total(self, small_data):
         X, y, r = small_data
         hp = pack('RF_1', 0.03, 0.0, DEFAULT_W0)
-        total, _, _ = run_single_learning_forward_trajectory(hp, 'RF_1', X, y, r)
-        tr, te, _, _ = run_train_test_single_reinforce_forward_trajectory(
+        total, _, _ = run_single_RF_learning_forward_trajectory(hp, 'RF_1', X, y, r)
+        tr, te, _, _ = run_train_test_single_RF_forward_trajectory(
             hp, 'RF_1', X, y, r, jnp.ones(X.shape[0], dtype=bool))
         assert np.isclose(float(tr), float(total), atol=1e-8)
         assert np.isclose(float(te), 0.0, atol=1e-8)
@@ -362,9 +362,9 @@ class TestForwardTrajectory:
         because the animal genuinely experienced all of them."""
         X, y, r = small_data
         hp = pack('RF_1', 0.03, 0.0, DEFAULT_W0)
-        _, _, lls_full = run_single_learning_forward_trajectory(hp, 'RF_1', X, y, r)
+        _, _, lls_full = run_single_RF_learning_forward_trajectory(hp, 'RF_1', X, y, r)
         mask = jnp.asarray(np.random.default_rng(1).random(X.shape[0]) > 0.2)
-        _, _, _, lls_masked = run_train_test_single_reinforce_forward_trajectory(
+        _, _, _, lls_masked = run_train_test_single_RF_forward_trajectory(
             hp, 'RF_1', X, y, r, mask)
         assert np.allclose(np.asarray(lls_full), np.asarray(lls_masked), atol=1e-10)
 
@@ -376,15 +376,15 @@ class TestObjective:
     def test_unregularized_objective_equals_nll(self, small_data):
         X, y, r = small_data
         hp = pack('RF_1', 0.03, 0.0, DEFAULT_W0)
-        nll, _, _ = run_single_learning_forward_trajectory(hp, 'RF_1', X, y, r)
-        assert np.isclose(float(compute_objective(hp, 'RF_1', X, y, r)), float(nll), atol=1e-8)
+        nll, _, _ = run_single_RF_learning_forward_trajectory(hp, 'RF_1', X, y, r)
+        assert np.isclose(float(compute_RF_objective(hp, 'RF_1', X, y, r)), float(nll), atol=1e-8)
 
     def test_masked_objective_equals_train_nll(self, small_data):
         X, y, r = small_data
         hp = pack('RF_1', 0.03, 0.0, DEFAULT_W0)
         mask = jnp.asarray(np.random.default_rng(2).random(X.shape[0]) > 0.2)
-        tr, _, _, _ = run_train_test_single_reinforce_forward_trajectory(hp, 'RF_1', X, y, r, mask)
-        assert np.isclose(float(compute_objective(hp, 'RF_1', X, y, r, True, mask)),
+        tr, _, _, _ = run_train_test_single_RF_forward_trajectory(hp, 'RF_1', X, y, r, mask)
+        assert np.isclose(float(compute_RF_objective(hp, 'RF_1', X, y, r, True, mask)),
                           float(tr), atol=1e-8)
 
     def test_ridge_adds_the_closed_form_penalty(self, small_data):
@@ -392,8 +392,8 @@ class TestObjective:
         na, nb = REINFORCE_MODELS['RF_b']
         hp = pack('RF_b', [0.01, 0.02, 0.03], [0.4, -0.2, 0.1], DEFAULT_W0)
         rl, ra, rb, mu_a, mu_b = 0.5, 0.3, 0.7, -3.0, 0.2
-        base = float(compute_objective(hp, 'RF_b', X, y, r))
-        withreg = float(compute_objective(hp, 'RF_b', X, y, r, False, None, rl, ra, rb, mu_a, mu_b))
+        base = float(compute_RF_objective(hp, 'RF_b', X, y, r))
+        withreg = float(compute_RF_objective(hp, 'RF_b', X, y, r, False, None, rl, ra, rb, mu_a, mu_b))
         expected = (rl * float(jnp.sum(hp[-NUM_WEIGHTS:] ** 2))
                     + ra * float(jnp.sum((hp[:na] - mu_a) ** 2))
                     + rb * float(jnp.sum((hp[na:na + nb] - mu_b) ** 2)))
@@ -402,7 +402,7 @@ class TestObjective:
     @pytest.mark.parametrize("model", sorted(REINFORCE_MODELS))
     def test_all_models_give_finite_objectives(self, small_data, model):
         X, y, r = small_data
-        assert np.isfinite(float(compute_objective(pack(model, 0.03, 0.2, DEFAULT_W0),
+        assert np.isfinite(float(compute_RF_objective(pack(model, 0.03, 0.2, DEFAULT_W0),
                                                    model, X, y, r)))
 
 
@@ -411,7 +411,7 @@ class TestHessian:
     def test_shape_and_symmetry(self, small_data, model):
         X, y, r = small_data
         n = get_num_params(model)
-        H, eig = compute_hessian(pack(model, 0.03, 0.2, DEFAULT_W0), model, X, y, r)
+        H, eig = compute_RF_hessian(pack(model, 0.03, 0.2, DEFAULT_W0), model, X, y, r)
         assert H.shape == (n, n) and eig.shape == (n,)
         assert np.allclose(np.asarray(H), np.asarray(H).T, atol=1e-6)
 
@@ -419,12 +419,12 @@ class TestHessian:
 class TestEpsilonBall:
     def test_passes_at_an_optimum_and_fails_away_from_one(self, small_data):
         X, y, r = small_data
-        init = generate_init_hyperparams('RF_1', 1e-2, 1e-1, 1e-1, jr.PRNGKey(0))
-        fit, _ = optax_fit_params(init, 'RF_1', X, y, r, max_iters=500, tol=1e-6)
-        _, nearby, res = run_epsilon_ball_test(fit, 'RF_1', X, y, r, jr.PRNGKey(1),
+        init = generate_RF_init_hyperparams('RF_1', 1e-2, 1e-1, 1e-1, jr.PRNGKey(0))
+        fit, _ = optax_fit_RF_params(init, 'RF_1', X, y, r, max_iters=500, tol=1e-6)
+        _, nearby, res = run_RF_epsilon_ball_test(fit, 'RF_1', X, y, r, jr.PRNGKey(1),
                                                num_samples=25, epsilon=1e-4)
         assert nearby.shape == (25,) and res == 'PASSED'
-        _, _, res_bad = run_epsilon_ball_test(fit + 0.5, 'RF_1', X, y, r, jr.PRNGKey(1),
+        _, _, res_bad = run_RF_epsilon_ball_test(fit + 0.5, 'RF_1', X, y, r, jr.PRNGKey(1),
                                               num_samples=25, epsilon=1e-4)
         assert res_bad == 'FAILED'
 
@@ -439,14 +439,14 @@ def test_recovery_RF_1():
     X, y, r, true_ws = simulate_reinforce_animal(true_alpha, 0.0, DEFAULT_W0, T=12000, seed=0)
     true_hp = pack('RF_1', true_alpha, 0.0, DEFAULT_W0)
 
-    _, _, best_hp, optim = run_randomized_optimization_procedure(
+    _, _, best_hp, optim = run_RF_randomized_optimization_procedure(
         X, y, r, jr.PRNGKey(3), 'RF_1', num_seeds=6, max_iters=500, tol=1e-4)
     hp = best_hyperparams(best_hp, optim)
-    alphas, _, w0 = unpack_reinforce_hyperparams(hp, 'RF_1')
+    alphas, _, w0 = unpack_RF_hyperparams(hp, 'RF_1')
 
     # the MLE must fit at least as well as the truth on finite data
-    assert float(compute_objective(hp, 'RF_1', X, y, r)) <= \
-        float(compute_objective(true_hp, 'RF_1', X, y, r)) + 1e-6
+    assert float(compute_RF_objective(hp, 'RF_1', X, y, r)) <= \
+        float(compute_RF_objective(true_hp, 'RF_1', X, y, r)) + 1e-6
     assert 0.5 * true_alpha < float(alphas[0]) < 2.0 * true_alpha
     assert np.abs(np.asarray(w0) - DEFAULT_W0).max() < 0.75
     assert trajectory_correlation(hp, 'RF_1', X, y, r, true_ws) > 0.95
@@ -459,13 +459,13 @@ def test_recovery_RF_per_weight_alphas():
     X, y, r, true_ws = simulate_reinforce_animal(true_alphas, 0.0, DEFAULT_W0, T=12000, seed=0)
     true_hp = pack('RF', true_alphas, 0.0, DEFAULT_W0)
 
-    _, _, best_hp, optim = run_randomized_optimization_procedure(
+    _, _, best_hp, optim = run_RF_randomized_optimization_procedure(
         X, y, r, jr.PRNGKey(3), 'RF', num_seeds=6, max_iters=500, tol=1e-4)
     hp = best_hyperparams(best_hp, optim)
-    alphas, _, _ = unpack_reinforce_hyperparams(hp, 'RF')
+    alphas, _, _ = unpack_RF_hyperparams(hp, 'RF')
 
-    assert float(compute_objective(hp, 'RF', X, y, r)) <= \
-        float(compute_objective(true_hp, 'RF', X, y, r)) + 1e-6
+    assert float(compute_RF_objective(hp, 'RF', X, y, r)) <= \
+        float(compute_RF_objective(true_hp, 'RF', X, y, r)) + 1e-6
     ratios = np.asarray(alphas) / true_alphas
     assert np.all((ratios > 0.4) & (ratios < 2.5)), f"alpha ratios {ratios}"
     assert trajectory_correlation(hp, 'RF', X, y, r, true_ws) > 0.95
@@ -485,10 +485,10 @@ def test_recovery_RF_b_1_alpha_times_beta(true_beta):
     ab_true = true_alpha * true_beta
     X, y, r, true_ws = simulate_reinforce_animal(true_alpha, ab_true, DEFAULT_W0,
                                                  T=12000, seed=0)
-    _, _, best_hp, optim = run_randomized_optimization_procedure(
+    _, _, best_hp, optim = run_RF_randomized_optimization_procedure(
         X, y, r, jr.PRNGKey(7), 'RF_b_1', num_seeds=6, max_iters=2000, tol=1e-4)
     hp = best_hyperparams(best_hp, optim)
-    alphas, intercepts, _ = unpack_reinforce_hyperparams(hp, 'RF_b_1')
+    alphas, intercepts, _ = unpack_RF_hyperparams(hp, 'RF_b_1')
     ab_fit = float(intercepts[0])
 
     # calibrated ratios over this beta range were 0.57-1.49; allow 0.4-2.0
@@ -506,10 +506,10 @@ def test_RF_b_1_hessian_is_positive_definite_in_the_stable_regime():
     true_alpha, true_beta = 0.03, 0.3
     true_intercept = true_alpha * true_beta
     X, y, r, _ = simulate_reinforce_animal(true_alpha, true_intercept, DEFAULT_W0, T=12000, seed=0)
-    _, _, best_hp, optim = run_randomized_optimization_procedure(
+    _, _, best_hp, optim = run_RF_randomized_optimization_procedure(
         X, y, r, jr.PRNGKey(7), 'RF_b_1', num_seeds=6, max_iters=2000, tol=1e-4)
     assert best_hp is not None, "expected converged seeds at T=12000"
-    _, eig = compute_hessian(best_hp, 'RF_b_1', X, y, r)
+    _, eig = compute_RF_hessian(best_hp, 'RF_b_1', X, y, r)
     eig = np.asarray(eig)
     assert np.all(eig > 0), f"expected a positive-definite Hessian, got {eig}"
     assert eig.max() / eig.min() < 1e4, f"ill-conditioned: {eig.max() / eig.min():.2e}"
@@ -561,7 +561,7 @@ def run_recovery(model, alphas, baselines, w0, T, num_seeds, fit_seed, data_seed
 
     X, y, r, true_ws = simulate_reinforce_animal(alphas, intercepts, w0, T=T, seed=data_seed)
     true_hp = pack(model, alphas, intercepts, w0)
-    obj_true = float(compute_objective(true_hp, model, X, y, r))
+    obj_true = float(compute_RF_objective(true_hp, model, X, y, r))
     growth = perturbation_growth(model, true_hp, X, y, r)
 
     print(f"\n=== {model} | T={T} | data_seed={data_seed} | {num_seeds} restarts ===")
@@ -573,7 +573,7 @@ def run_recovery(model, alphas, baselines, w0, T, num_seeds, fit_seed, data_seed
     buf = io.StringIO()
     ctx = contextlib.redirect_stdout(buf) if quiet else contextlib.nullcontext()
     with ctx:
-        _, _, best_hp, optim = run_randomized_optimization_procedure(
+        _, _, best_hp, optim = run_RF_randomized_optimization_procedure(
             X, y, r, jr.PRNGKey(fit_seed), model, num_seeds=num_seeds,
             max_iters=max_iters, tol=tol, ridge_lambda=ridge_lambda,
             ridge_alpha=ridge_alpha, ridge_c=ridge_c, mu_alpha=mu_alpha, mu_c=mu_c,
@@ -581,7 +581,7 @@ def run_recovery(model, alphas, baselines, w0, T, num_seeds, fit_seed, data_seed
 
     nbad = len(np.atleast_1d(np.asarray(optim['bad_run_idxs'])))
     hp = best_hyperparams(best_hp, optim)
-    a_fit, c_fit, w0_fit = unpack_reinforce_hyperparams(hp, model)
+    a_fit, c_fit, w0_fit = unpack_RF_hyperparams(hp, model)
     b_fit = c_fit / a_fit
 
     na, nb = REINFORCE_MODELS[model]
@@ -589,8 +589,8 @@ def run_recovery(model, alphas, baselines, w0, T, num_seeds, fit_seed, data_seed
     c_true = np.broadcast_to(np.asarray(intercepts, float), (NUM_WEIGHTS,)) 
     b_true = c_true / a_true
 
-    g = jax.grad(compute_objective)(hp, model, X, y, r)
-    _, eig = compute_hessian(hp, model, X, y, r)
+    g = jax.grad(compute_RF_objective)(hp, model, X, y, r)
+    _, eig = compute_RF_hessian(hp, model, X, y, r)
     eig = np.asarray(eig)
 
     print(f"  converged        : {num_seeds - nbad}/{num_seeds}"
@@ -603,7 +603,7 @@ def run_recovery(model, alphas, baselines, w0, T, num_seeds, fit_seed, data_seed
         print(f"  alpha*beta  true {np.round(ab_t, 5)}  ->  fit {np.round(ab_f, 5)}"
               f"   <- the identified quantity")
     print(f"  w0       true {np.round(np.asarray(w0, float), 3)}  ->  fit {np.round(np.asarray(w0_fit), 3)}")
-    print(f"  objective  fit {float(compute_objective(hp, model, X, y, r)):.3f} vs truth {obj_true:.3f}")
+    print(f"  objective  fit {float(compute_RF_objective(hp, model, X, y, r)):.3f} vs truth {obj_true:.3f}")
     print(f"  |grad| {float(jnp.linalg.norm(g)):.2e}   eig [{eig.min():.2e}, {eig.max():.2e}]   "
           f"PD={bool(np.all(eig > 0))}")
     print(f"  trajectory correlation (worst weight): {trajectory_correlation(hp, model, X, y, r, true_ws):.4f}")

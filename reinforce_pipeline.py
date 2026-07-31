@@ -40,7 +40,7 @@ def get_num_params(model):
 
 
 @partial(jit, static_argnames=('model',))
-def unpack_reinforce_hyperparams(hyperparams, model):
+def unpack_RF_hyperparams(hyperparams, model):
     """Split the flat parameter vector into (alphas, intercepts, w0).
 
     Layout -- w0 is ALWAYS last, so `hyperparams[-NUM_WEIGHTS:]` is w0, matching the
@@ -88,7 +88,7 @@ def unpack_reinforce_hyperparams(hyperparams, model):
 
 
 @jit
-def log_likelihood(out, choice):
+def RF_log_likelihood(out, choice):
     '''
     out        : the model's output value
     choice     : the choice made by the agent (L = 0, R = 1 here!)
@@ -97,7 +97,7 @@ def log_likelihood(out, choice):
     return ll
 
 
-def generate_init_hyperparams(model, alpha_init_scale, c_init_scale, w0_init_scale, key,
+def generate_RF_init_hyperparams(model, alpha_init_scale, c_init_scale, w0_init_scale, key,
                               alpha_init_guess=None, c_init_guess=None, w0_init_guess=None,
                               noise_level=0.01):
     '''
@@ -109,12 +109,6 @@ def generate_init_hyperparams(model, alpha_init_scale, c_init_scale, w0_init_sca
     update rule identical to plain REINFORCE, so every intercept model starts at its
     no-intercept special case and only moves away if the data support it. Initial weights
     are likewise zero-mean normal.
-
-    NOTE on scale: the intercept is c = alpha * beta, so a sensible c_init_scale is of
-    order alpha (~1e-2), NOT order 1. The default c_init_scale=1e-1 used by
-    run_randomized_optimization_procedure implies |beta| ~ 10 at initialization and
-    measurably inflates the fitted intercept (3.3x too large at beta=0.3, T=12000);
-    1e-4, or a scale tied to alpha, recovers it to within 10%.
 
     Arguments:
     - model            : key into REINFORCE_MODELS
@@ -158,7 +152,7 @@ def generate_init_hyperparams(model, alpha_init_scale, c_init_scale, w0_init_sca
 
 
 @partial(jit, static_argnames=('model',))
-def run_train_test_single_reinforce_forward_trajectory(hyperparams, model, inputs, outputs, rewards, train_mask):
+def run_train_test_single_RF_forward_trajectory(hyperparams, model, inputs, outputs, rewards, train_mask):
     """Simulate the online-GD learning trajectory for a single sequence and split
     its negative log-likelihood into train and test portions via `train_mask`.
 
@@ -177,7 +171,7 @@ def run_train_test_single_reinforce_forward_trajectory(hyperparams, model, input
     - lls:       per-trial log-likelihoods (before masking)
     """
 
-    alphas, intercepts, w0 = unpack_reinforce_hyperparams(hyperparams, model)
+    alphas, intercepts, w0 = unpack_RF_hyperparams(hyperparams, model)
 
     def _step(w, data_point):
         x, y, rew = data_point
@@ -186,7 +180,7 @@ def run_train_test_single_reinforce_forward_trajectory(hyperparams, model, input
         out = jnp.dot(w, x)
 
         # compute probability of going right
-        ll_R = log_likelihood(out, choice=1)
+        ll_R = RF_log_likelihood(out, choice=1)
         p_R = jnp.exp(ll_R)
 
         # compute policy gradient
@@ -196,7 +190,7 @@ def run_train_test_single_reinforce_forward_trajectory(hyperparams, model, input
         w_new = w + update
 
         # for the current weights compute the log-likelihood of the data given the inference params 
-        ll = log_likelihood(out, y)
+        ll = RF_log_likelihood(out, y)
 
         return w_new, (ll, w_new)
 
@@ -211,7 +205,7 @@ def run_train_test_single_reinforce_forward_trajectory(hyperparams, model, input
 
 
 @partial(jit, static_argnames=('model',))
-def run_single_learning_forward_trajectory(hyperparams, model, inputs, outputs, rewards):
+def run_single_RF_learning_forward_trajectory(hyperparams, model, inputs, outputs, rewards):
     """Simulate the online-GD learning trajectory for a single sequence and return
     its total negative log-likelihood over all trials.
 
@@ -228,13 +222,13 @@ def run_single_learning_forward_trajectory(hyperparams, model, inputs, outputs, 
     - lls:       per-trial log-likelihoods
     """
 
-    total_nll, _, ws, lls = run_train_test_single_reinforce_forward_trajectory(hyperparams, model, inputs, outputs, rewards, jnp.ones_like(outputs, dtype=bool))
+    total_nll, _, ws, lls = run_train_test_single_RF_forward_trajectory(hyperparams, model, inputs, outputs, rewards, jnp.ones_like(outputs, dtype=bool))
 
     return total_nll, ws, lls
 
 
 @partial(jit, static_argnames=('model', 'masked','ridge_lambda', 'ridge_alpha', 'ridge_c', 'mu_alpha', 'mu_c'))
-def compute_objective(hyperparams, model, inputs, outputs, rewards,
+def compute_RF_objective(hyperparams, model, inputs, outputs, rewards,
                 masked=False, train_mask=None, 
                 ridge_lambda=0., ridge_alpha=0., ridge_c=0., mu_alpha=0., mu_c=0.):
     N = len(hyperparams)
@@ -245,9 +239,9 @@ def compute_objective(hyperparams, model, inputs, outputs, rewards,
     # branch when train_mask is None (the plain single-animal case).
     if masked:
         # train/test split: score only the training trials (train_mask: True = train)
-        nll = run_train_test_single_reinforce_forward_trajectory(hyperparams, model, inputs, outputs, rewards, train_mask)[0]
+        nll = run_train_test_single_RF_forward_trajectory(hyperparams, model, inputs, outputs, rewards, train_mask)[0]
     else:
-        nll = run_single_learning_forward_trajectory(hyperparams, model, inputs, outputs, rewards)[0]
+        nll = run_single_RF_learning_forward_trajectory(hyperparams, model, inputs, outputs, rewards)[0]
 
     l2_prior = ridge_lambda * jnp.sum(hyperparams[-NUM_WEIGHTS:]**2) + ridge_alpha * jnp.sum((hyperparams[:num_alphas] - mu_alpha)**2) + ridge_c * jnp.sum((hyperparams[num_alphas:num_alphas + num_baselines] - mu_c)**2)
     objective = nll + l2_prior
@@ -256,10 +250,10 @@ def compute_objective(hyperparams, model, inputs, outputs, rewards,
 
 
 @partial(jit, static_argnames=('model', 'masked', 'ridge_lambda', 'ridge_alpha', 'ridge_c', 'mu_alpha', 'mu_c'))
-def compute_hessian(hyperparams, model, inputs, outputs, rewards,
+def compute_RF_hessian(hyperparams, model, inputs, outputs, rewards,
                     masked=False, train_mask=None,
                     ridge_lambda=0., ridge_alpha=0., ridge_c=0., mu_alpha=0., mu_c=0.):
-    hess_fn = jax.hessian(compute_objective)
+    hess_fn = jax.hessian(compute_RF_objective)
     hessian = hess_fn(hyperparams, model, inputs, outputs, rewards,
                       masked, train_mask,
                       ridge_lambda, ridge_alpha, ridge_c, mu_alpha, mu_c)
@@ -269,12 +263,12 @@ def compute_hessian(hyperparams, model, inputs, outputs, rewards,
 
 
 # init_hyperparams is an array
-def optax_fit_params(init_hyperparams, model, inputs, outputs, rewards,
+def optax_fit_RF_params(init_hyperparams, model, inputs, outputs, rewards,
                      masked=False, train_mask=None, max_iters=10_000, tol=1e-4,
                      ridge_lambda=0., ridge_alpha=0., ridge_c=0., mu_alpha=0., mu_c=0.,
                      explode_tol=1e7, burn_in_iters=1_000):
 
-    meta_loss_fn = partial(compute_objective, model=model, inputs=inputs, outputs=outputs, rewards=rewards,
+    meta_loss_fn = partial(compute_RF_objective, model=model, inputs=inputs, outputs=outputs, rewards=rewards,
                            masked=masked, train_mask=train_mask, ridge_lambda=ridge_lambda,
                            ridge_alpha=ridge_alpha, ridge_c=ridge_c, mu_alpha=mu_alpha, mu_c=mu_c)
     opt = optax.lbfgs(memory_size=50)
@@ -312,8 +306,8 @@ def optax_fit_params(init_hyperparams, model, inputs, outputs, rewards,
     return final_hyperparams, final_state
 
 
-def run_epsilon_ball_test(hyperparams_arr, model, inputs, outputs, rewards, key,
-                          masked=False, train_mask=None, num_samples=25, epsilon=0.01,
+def run_RF_epsilon_ball_test(hyperparams_arr, model, inputs, outputs, rewards, key,
+                          masked=False, train_mask=None, num_samples=25, epsilon=1e-3,
                           ridge_lambda=0., ridge_alpha=0., ridge_c=0., mu_alpha=0., mu_c=0.):
     """
     Test whether hyperparams_arr is a local optimum by evaluating the objective at
@@ -326,7 +320,7 @@ def run_epsilon_ball_test(hyperparams_arr, model, inputs, outputs, rewards, key,
     """
     result = 'FAILED'
     N = len(hyperparams_arr)
-    curr_objective = compute_objective(hyperparams_arr, model, inputs, outputs, rewards,
+    curr_objective = compute_RF_objective(hyperparams_arr, model, inputs, outputs, rewards,
                                        masked, train_mask,
                                        ridge_lambda, ridge_alpha, ridge_c, mu_alpha, mu_c)
 
@@ -338,7 +332,7 @@ def run_epsilon_ball_test(hyperparams_arr, model, inputs, outputs, rewards, key,
 
     # Vectorize objective computation over perturbed hyperparams
     def compute_objective_single(curr_hyperparams):
-        return compute_objective(curr_hyperparams, model, inputs, outputs, rewards,
+        return compute_RF_objective(curr_hyperparams, model, inputs, outputs, rewards,
                                  masked, train_mask,
                                  ridge_lambda, ridge_alpha, ridge_c, mu_alpha, mu_c)
 
@@ -350,13 +344,14 @@ def run_epsilon_ball_test(hyperparams_arr, model, inputs, outputs, rewards, key,
     return curr_objective, nearby_objectives, result
 
 
-def run_randomized_optimization_procedure(inputs, outputs, rewards, key, model,
+def run_RF_randomized_optimization_procedure(inputs, outputs, rewards, key, model,
                                           masked=False, train_mask=None, num_seeds=25, max_iters=500, tol=1e-4,
                                           alpha_init_scale=1e-2, c_init_scale=1e-1, w0_init_scale=1e-1,
                                           alpha_init_guess=None, c_init_guess=None, w0_init_guess=None,
                                           noise_level=0.01, ridge_lambda=0.,
                                           ridge_alpha=0., ridge_c=0., mu_alpha=0., mu_c=0.,
-                                          explode_tol=1e7, burn_in_iters=1_000, print_grad_and_hessian=False):
+                                          explode_tol=1e7, burn_in_iters=1_000, 
+                                          print_grad_and_hessian=False, run_epsilon_ball_test=False):
 
     num_alphas, num_baselines = REINFORCE_MODELS[model]
 
@@ -376,11 +371,11 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, model,
     for i in range(num_seeds):
         _, key, init_key, test_key = jr.split(key, 4)
 
-        init_hyperparams = generate_init_hyperparams(model, alpha_init_scale, c_init_scale, w0_init_scale, init_key,
+        init_hyperparams = generate_RF_init_hyperparams(model, alpha_init_scale, c_init_scale, w0_init_scale, init_key,
                                                      alpha_init_guess=alpha_init_guess, c_init_guess=c_init_guess,
                                                      w0_init_guess=w0_init_guess, noise_level=noise_level)
 
-        hyperparams_arr, final_state = optax_fit_params(init_hyperparams, model, inputs, outputs, rewards,
+        hyperparams_arr, final_state = optax_fit_RF_params(init_hyperparams, model, inputs, outputs, rewards,
                                                         masked=masked, train_mask=train_mask,
                                                         max_iters=max_iters, tol=tol, ridge_lambda=ridge_lambda,
                                                         ridge_alpha=ridge_alpha, ridge_c=ridge_c,
@@ -394,40 +389,45 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, model,
 
         converged = (grad_norm <= tol)
 
-        inferred_objective_val = compute_objective(hyperparams_arr, model, inputs, outputs, rewards,
+        inferred_objective_val = compute_RF_objective(hyperparams_arr, model, inputs, outputs, rewards,
                                                    masked, train_mask,
                                                    ridge_lambda, ridge_alpha, ridge_c, mu_alpha, mu_c)
         objective_vals.append(inferred_objective_val)
-
-        # run epsilon-ball test at candidate local optimum
-        # _, _, result = run_epsilon_ball_test(hyperparams_arr, model, inputs, outputs, rewards, test_key,
-        #                                      masked=masked, train_mask=train_mask, num_samples=epsilon_seeds,
-        #                                      epsilon=epsilon, ridge_lambda=ridge_lambda, ridge_alpha=ridge_alpha,
-        #                                      ridge_c=ridge_c, mu_alpha=mu_alpha, mu_c=mu_c)
-
-        # compute gradient and Hessian eigenvalues at candidate local optimum
-        eigvals = None
-        grad = None
-        if print_grad_and_hessian and not jnp.isnan(inferred_objective_val):
-            _, eigvals = compute_hessian(hyperparams_arr, model, inputs, outputs, rewards,
-                                         masked=masked, train_mask=train_mask, ridge_lambda=ridge_lambda,
-                                         ridge_alpha=ridge_alpha, ridge_c=ridge_c, mu_alpha=mu_alpha, mu_c=mu_c)
-
-            grad = jax.grad(compute_objective)(hyperparams_arr, model, inputs, outputs, rewards,
-                                               masked, train_mask,
-                                               ridge_lambda, ridge_alpha, ridge_c, mu_alpha, mu_c)
 
         # Print results from current optimization seed
         print(f'Iter {i+1} Inferred Objective: {inferred_objective_val}', flush=True)
         print(f'Iterations: {iter_count}/{max_iters}', flush=True)
         print(f'Converged: {converged}', flush=True)
-        # print(f'Epsilon-ball test result: {result}', flush=True)
+
+        # run epsilon-ball test at candidate local optimum
+        if run_epsilon_ball_test:
+            _, _, result = run_RF_epsilon_ball_test(hyperparams_arr, model, inputs, outputs, rewards, test_key,
+                                                masked=masked, train_mask=train_mask,
+                                                ridge_lambda=ridge_lambda, ridge_alpha=ridge_alpha,
+                                                ridge_c=ridge_c, mu_alpha=mu_alpha, mu_c=mu_c)
+            print(f'Epsilon-ball test result: {result}', flush=True)
+
+        # compute gradient and Hessian eigenvalues at candidate local optimum
+        eigvals = None
+        grad = None
+        if print_grad_and_hessian and not jnp.isnan(inferred_objective_val):
+            _, eigvals = compute_RF_hessian(hyperparams_arr, model, inputs, outputs, rewards,
+                                         masked=masked, train_mask=train_mask, ridge_lambda=ridge_lambda,
+                                         ridge_alpha=ridge_alpha, ridge_c=ridge_c, mu_alpha=mu_alpha, mu_c=mu_c)
+
+            grad = jax.grad(compute_RF_objective)(hyperparams_arr, model, inputs, outputs, rewards,
+                                               masked, train_mask,
+                                               ridge_lambda, ridge_alpha, ridge_c, mu_alpha, mu_c)
+
+            print(f'Grad: {grad}')
+            print(f'Min/max eigvals: {eigvals.min(), eigvals.max()}', flush=True)
+
         print('\n', flush=True)
 
         curr_alphas = jnp.exp(hyperparams_arr[:num_alphas])
         curr_intercepts = hyperparams_arr[num_alphas:num_alphas + num_baselines]
 
-        print(f'Inferred alpha: {curr_alphas}, Inferred intercept: {curr_intercepts}', flush=True)
+        print(f'Inferred alpha: {curr_alphas}, Inferred baselines: {curr_intercepts / curr_alphas}', flush=True)
         print(f'Inferred w_0: {hyperparams_arr[-NUM_WEIGHTS:]}')
         print('\n')
 
@@ -459,8 +459,8 @@ def run_randomized_optimization_procedure(inputs, outputs, rewards, key, model,
 
 
 def plot_weight_trajectory(true_hyp, inf_hyp, model, inputs, outputs, rewards):
-    _, ws_inf, _ = run_single_learning_forward_trajectory(inf_hyp, model, inputs, outputs, rewards)
-    _, ws_true, _ = run_single_learning_forward_trajectory(true_hyp, model, inputs, outputs, rewards)
+    _, ws_inf, _ = run_single_RF_learning_forward_trajectory(inf_hyp, model, inputs, outputs, rewards)
+    _, ws_true, _ = run_single_RF_learning_forward_trajectory(true_hyp, model, inputs, outputs, rewards)
 
     fig, ax = plt.subplots(1, 3, figsize=(12, 4))
     for i in range(3):
