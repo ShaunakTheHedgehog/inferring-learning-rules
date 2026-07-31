@@ -539,11 +539,11 @@ def main():
     p.add_argument('--max_iters', type=int, default=2000, help='max L-BFGS iterations per restart')
     p.add_argument('--tol', type=float, default=1e-3, help='gradient-norm convergence tolerance')
     p.add_argument('--fit_seed', type=int, default=0, help='PRNG seed for the restarts')
-    p.add_argument('--alpha_init_scale', type=float, default=1e-2)
+    p.add_argument('--alpha_init_scale', type=float, default=1e0)
     # c = alpha*beta is O(alpha), so an init scale of order 1 badly inflates the fitted
     # intercept; 1e-4 keeps every restart near the plain-REINFORCE point c = 0.
     p.add_argument('--c_init_scale', type=float, default=1e-4)
-    p.add_argument('--w0_init_scale', type=float, default=1e-1)
+    p.add_argument('--w0_init_scale', type=float, default=1e0)
     p.add_argument('--explode_tol', type=float, default=1e7)
     p.add_argument('--burn_in_iters', type=int, default=1_000)
 
