@@ -10,12 +10,19 @@ import optax.tree_utils as otu
 from functools import partial
 import numpy as np
 
+import argparse
+import os
+import pickle as pkl
+import time
+
 # optax renamed `tree_l2_norm` -> `tree_norm` in v0.2.5; support both so this runs
 # on older and newer optax without a deprecation warning or an AttributeError.
 _tree_l2_norm = getattr(otu, "tree_norm", None) or otu.tree_l2_norm
 
 import matplotlib.pyplot as plt
-from utils import get_nonlinearity, make_train_mask, flatten_params, generate_randomized_multisession_graded_data
+from utils import (get_nonlinearity, make_train_mask, flatten_params,
+                   generate_randomized_multisession_graded_data,
+                   flip_outputs, check_writable, to_numpy)
 from globals import DEPTH_TO_NUM_WEIGHTS, MU_ALPHA, MU_BETA
 
 NUM_WEIGHTS = 3          # w = (bias, right, left) into a single output unit
@@ -427,7 +434,11 @@ def run_RF_randomized_optimization_procedure(inputs, outputs, rewards, key, mode
         curr_alphas = jnp.exp(hyperparams_arr[:num_alphas])
         curr_intercepts = hyperparams_arr[num_alphas:num_alphas + num_baselines]
 
-        print(f'Inferred alpha: {curr_alphas}, Inferred baselines: {curr_intercepts / curr_alphas}', flush=True)
+        # slice alphas to match: the no-intercept models have curr_intercepts of shape (0,),
+        # which will not broadcast against the (3,) alphas of the per-weight models.
+        curr_baselines = curr_intercepts / curr_alphas[:num_baselines]
+
+        print(f'Inferred alpha: {curr_alphas}, Inferred baselines: {curr_baselines}', flush=True)
         print(f'Inferred w_0: {hyperparams_arr[-NUM_WEIGHTS:]}')
         print('\n')
 
@@ -467,6 +478,196 @@ def plot_weight_trajectory(true_hyp, inf_hyp, model, inputs, outputs, rewards):
         ax[i].plot(ws_true[:, i], color='black', linestyle='dashed')
         ax[i].plot(ws_inf[:, i], color='green')
     plt.show()
+
+
+# CLUSTER FITTING ENTRY POINT
+# ---------------------------------------------------------------------------------------------- #
+
+DEFAULT_DATA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'witten_mouse_data.pkl')
+
+
+def list_mouse_ids(data_path=DEFAULT_DATA_PATH):
+    """Sorted mouse ids in the dataset.
+
+    The ids are NON-CONTIGUOUS (13..43, then 901..914), so a SLURM array index must be
+    mapped through this list -- using the index directly as a mouse_id would silently
+    skip most of the animals.
+    """
+    with open(data_path, 'rb') as f:
+        return sorted(pkl.load(f).keys())
+
+
+def load_mouse_arrays(mouse_id, data_path=DEFAULT_DATA_PATH):
+    """One mouse's (inputs, outputs, rewards), in the coding this pipeline expects.
+
+    THE CHOICE FLIP: the dataset codes 0 = right / 1 = left, but `RF_log_likelihood`
+    treats 1 as a rightward choice, so the choices are flipped here -- the same flip
+    witten_psytrack_fitting applies. Without it the fitted right/left weights come out
+    sign-mirrored. `inputs` is already [bias, right contrast, left contrast], which
+    matches w = (bias, right, left), and rewards are unaffected by the flip.
+    """
+    with open(data_path, 'rb') as f:
+        data = pkl.load(f)
+    if mouse_id not in data:
+        raise SystemExit(f'mouse {mouse_id} not in {data_path}; available: {sorted(data.keys())}')
+    mouse = data[mouse_id]
+
+    inputs = jnp.asarray(np.asarray(mouse['inputs'], dtype=float))
+    outputs = jnp.asarray(flip_outputs(np.asarray(mouse['outputs']).astype(int)))
+    rewards = jnp.asarray(np.asarray(mouse['rewards'], dtype=float))
+
+    assert inputs.ndim == 2 and inputs.shape[1] == NUM_WEIGHTS, f'expected (T,3) inputs, got {inputs.shape}'
+    assert outputs.shape == (inputs.shape[0],), 'inputs/outputs length mismatch'
+    return inputs, outputs, rewards
+
+
+def main():
+    p = argparse.ArgumentParser(
+        description='Fit one REINFORCE model to one Witten mouse (one SLURM array task).',
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    # not `required`, so --list_mice works on its own; checked after that early exit
+    p.add_argument('--model', choices=sorted(REINFORCE_MODELS))
+    p.add_argument('--mouse_id', type=int, default=None, help='mouse id (omit if using --task_id)')
+    p.add_argument('--task_id', type=int, default=None,
+                   help='SLURM array index into the SORTED mouse-id list (not a mouse_id)')
+    p.add_argument('--list_mice', action='store_true',
+                   help='print the mouse ids and the array size, then exit')
+    p.add_argument('--data_path', default=DEFAULT_DATA_PATH)
+
+    # optimization
+    p.add_argument('--num_seeds', type=int, default=200, help='random restarts')
+    p.add_argument('--max_iters', type=int, default=2000, help='max L-BFGS iterations per restart')
+    p.add_argument('--tol', type=float, default=1e-3, help='gradient-norm convergence tolerance')
+    p.add_argument('--fit_seed', type=int, default=0, help='PRNG seed for the restarts')
+    p.add_argument('--alpha_init_scale', type=float, default=1e-2)
+    # c = alpha*beta is O(alpha), so an init scale of order 1 badly inflates the fitted
+    # intercept; 1e-4 keeps every restart near the plain-REINFORCE point c = 0.
+    p.add_argument('--c_init_scale', type=float, default=1e-4)
+    p.add_argument('--w0_init_scale', type=float, default=1e-1)
+    p.add_argument('--explode_tol', type=float, default=1e7)
+    p.add_argument('--burn_in_iters', type=int, default=1_000)
+
+    # regularization -- off by default, i.e. a pure MLE fit
+    p.add_argument('--ridge_lambda', type=float, default=0., help='ridge on w0')
+    p.add_argument('--ridge_alpha', type=float, default=0., help='ridge on log-alpha')
+    p.add_argument('--ridge_c', type=float, default=0., help='ridge on the intercept c')
+    p.add_argument('--mu_alpha', type=float, default=0., help='prior mean for log-alpha')
+    p.add_argument('--mu_c', type=float, default=0., help='prior mean for c')
+
+    # output
+    p.add_argument('--out_dir', default='reinforce_results', help='root directory for results')
+    p.add_argument('--overwrite', action='store_true', help='refit even if the result exists')
+    p.add_argument('--dry_run', action='store_true', help='tiny budget for a fast smoke test')
+    args = p.parse_args()
+
+    mouse_ids = list_mouse_ids(args.data_path)
+    if args.list_mice:
+        print(f'{len(mouse_ids)} mice (use --array=0-{len(mouse_ids) - 1}):')
+        print('  ' + ', '.join(f'{i}->{m}' for i, m in enumerate(mouse_ids)))
+        return
+    if args.model is None:
+        raise SystemExit('--model is required (or use --list_mice)')
+
+    # resolve which mouse this invocation handles
+    if args.task_id is not None:
+        if not (0 <= args.task_id < len(mouse_ids)):
+            raise SystemExit(f'--task_id {args.task_id} out of range 0..{len(mouse_ids) - 1}')
+        mouse_id = mouse_ids[args.task_id]
+    elif args.mouse_id is not None:
+        mouse_id = args.mouse_id
+    else:
+        raise SystemExit('provide either --task_id or --mouse_id')
+
+    if args.dry_run:
+        args.num_seeds, args.max_iters = 2, 20
+
+    out_dir = os.path.join(args.out_dir, args.model)
+    try:
+        os.makedirs(out_dir, exist_ok=True)
+    except OSError as e:
+        raise SystemExit(f'ERROR: cannot create output directory {out_dir}: {e}')
+    check_writable(out_dir)  # fail before fitting, not after a long run
+    out_path = os.path.join(out_dir, f'mouse_{mouse_id}.pkl')
+    if os.path.exists(out_path) and not args.overwrite:
+        print(f'{out_path} already exists; use --overwrite to refit. Exiting.', flush=True)
+        return
+
+    inputs, outputs, rewards = load_mouse_arrays(mouse_id, args.data_path)
+    T = int(outputs.shape[0])
+    print(f'=== mouse {mouse_id} | model {args.model} | T={T} trials | '
+          f'reward rate {float(jnp.mean(rewards)):.3f} ===', flush=True)
+
+    t0 = time.time()
+    best_w0, min_objective_val, best_hyperparams_arr, optim_dict = run_RF_randomized_optimization_procedure(
+        inputs, outputs, rewards, jr.PRNGKey(args.fit_seed), args.model,
+        num_seeds=args.num_seeds, max_iters=args.max_iters, tol=args.tol,
+        alpha_init_scale=args.alpha_init_scale, c_init_scale=args.c_init_scale,
+        w0_init_scale=args.w0_init_scale,
+        ridge_lambda=args.ridge_lambda, ridge_alpha=args.ridge_alpha, ridge_c=args.ridge_c,
+        mu_alpha=args.mu_alpha, mu_c=args.mu_c,
+        explode_tol=args.explode_tol, burn_in_iters=args.burn_in_iters,
+    )
+    elapsed = time.time() - t0
+
+    # `run_RF_randomized_optimization_procedure` reports a best fit only among CONVERGED
+    # seeds, returning None if none converged. Fall back to the best finite objective so a
+    # long run is never discarded; `converged` records whether any seed met the tolerance.
+    converged = best_hyperparams_arr is not None
+    objective_vals = np.asarray(optim_dict['nlls'], dtype=float)
+    if not np.any(np.isfinite(objective_vals)):
+        raise SystemExit('ERROR: no seed produced a finite objective; nothing to save.')
+    best_idx = int(np.nanargmin(np.where(np.isfinite(objective_vals), objective_vals, np.nan)))
+    best_hyperparams_arr = optim_dict['hyperparams'][best_idx]
+    min_objective_val = float(objective_vals[best_idx])
+    best_w0 = best_hyperparams_arr[-NUM_WEIGHTS:]
+    if not converged:
+        print(f'WARNING: no seed converged; falling back to best finite seed '
+              f'(idx {best_idx}, objective {min_objective_val:.4f})', flush=True)
+
+    # Prior-free NLL on the full sequence: equals the objective only when unregularized,
+    # and is what AIC must be built from.
+    nll = float(run_single_RF_learning_forward_trajectory(
+        best_hyperparams_arr, args.model, inputs, outputs, rewards)[0])
+    num_params = get_num_params(args.model)
+    aic = 2 * num_params + 2 * nll
+
+    alphas, intercepts, w0 = unpack_RF_hyperparams(best_hyperparams_arr, args.model)
+    num_alphas, num_intercepts = REINFORCE_MODELS[args.model]
+    print(f'\nalpha={np.asarray(alphas)[:num_alphas]} '
+          f'intercept={np.asarray(intercepts)[:num_intercepts]} w0={np.asarray(w0)}', flush=True)
+    print(f'NLL={nll:.3f} ({nll / T:.5f}/trial, chance={np.log(2):.5f}) | '
+          f'AIC={aic:.3f} ({num_params} params) | converged={converged} | '
+          f'elapsed={elapsed:.1f}s', flush=True)
+
+    record = dict(
+        # identity
+        mouse_id=mouse_id, model=args.model, num_params=num_params, num_trials=T,
+        flipped_outputs=True, data_path=os.path.abspath(args.data_path),
+        # headline results
+        best_w0=best_w0, best_hyperparams_arr=best_hyperparams_arr,
+        min_objective_val=min_objective_val, nll=nll, aic=aic,
+        converged=converged, optim_dict=optim_dict,
+        # fit settings
+        num_seeds=args.num_seeds, max_iters=args.max_iters, tol=args.tol, fit_seed=args.fit_seed,
+        alpha_init_scale=args.alpha_init_scale, c_init_scale=args.c_init_scale,
+        w0_init_scale=args.w0_init_scale,
+        ridge_lambda=args.ridge_lambda, ridge_alpha=args.ridge_alpha, ridge_c=args.ridge_c,
+        mu_alpha=args.mu_alpha, mu_c=args.mu_c,
+        elapsed_sec=elapsed,
+    )
+    record = to_numpy(record)  # drop JAX arrays -> loads anywhere, independent of JAX version
+
+    # write to a temp file then rename, so a job killed mid-write (e.g. by a SLURM time
+    # limit) cannot leave a half-written pickle for a later aggregation step to choke on
+    tmp_path = f'{out_path}.tmp{os.getpid()}'
+    with open(tmp_path, 'wb') as f:
+        pkl.dump(record, f)
+    os.replace(tmp_path, out_path)
+    print(f'saved -> {out_path}', flush=True)
+
+
+if __name__ == '__main__':
+    main()
 
 
     
