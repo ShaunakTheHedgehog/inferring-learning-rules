@@ -553,7 +553,7 @@ def test_chaos_boundary_tracks_reward_rate():
 # --------------------------------------------------------------------------- #
 def run_recovery(model, alphas, baselines, w0, T, num_seeds, fit_seed, data_seed,
                  max_iters, tol=1e-3, ridge_lambda=0., ridge_alpha=0., ridge_c=0., mu_alpha=0., mu_c=0.,
-                 quiet=True, alpha_init_scale=1e-1, c_init_scale=1e-5, w0_init_scale=1e-1):
+                 quiet=True, alpha_init_scale=1e0, c_init_scale=1e-5, w0_init_scale=1e0):
     """Simulate from known parameters, refit, and report recovery + diagnostics."""
     import contextlib, io
 
