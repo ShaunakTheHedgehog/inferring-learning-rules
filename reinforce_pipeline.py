@@ -471,11 +471,15 @@ def run_RF_randomized_optimization_procedure(inputs, outputs, rewards, key, mode
 
 def plot_weight_trajectory(true_hyp, inf_hyp, model, inputs, outputs, rewards):
     _, ws_inf, _ = run_single_RF_learning_forward_trajectory(inf_hyp, model, inputs, outputs, rewards)
-    _, ws_true, _ = run_single_RF_learning_forward_trajectory(true_hyp, model, inputs, outputs, rewards)
+
+    ws_true = None 
+    if true_hyp is not None:
+        _, ws_true, _ = run_single_RF_learning_forward_trajectory(true_hyp, model, inputs, outputs, rewards)
 
     fig, ax = plt.subplots(1, 3, figsize=(12, 4))
     for i in range(3):
-        ax[i].plot(ws_true[:, i], color='black', linestyle='dashed')
+        if ws_true is not None:
+            ax[i].plot(ws_true[:, i], color='black', linestyle='dashed')
         ax[i].plot(ws_inf[:, i], color='green')
     plt.show()
 
