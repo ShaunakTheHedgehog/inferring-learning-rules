@@ -607,6 +607,7 @@ def main():
         ridge_lambda=args.ridge_lambda, ridge_alpha=args.ridge_alpha, ridge_c=args.ridge_c,
         mu_alpha=args.mu_alpha, mu_c=args.mu_c,
         explode_tol=args.explode_tol, burn_in_iters=args.burn_in_iters,
+        run_epsilon_ball_test=args.print_diagnostics, print_grad_and_hessian=args.print_diagnostics,
     )
     elapsed = time.time() - t0
 
