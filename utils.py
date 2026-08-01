@@ -7,6 +7,7 @@ from jax.tree_util import tree_map
 import optax
 import numpy as np
 
+import os
 import pickle as pkl
 from scipy import stats
 from scipy.signal import argrelmax
@@ -34,6 +35,36 @@ def flip_outputs(y):
 
 def tanh_p(x, p=5.):
     return jnp.tanh(p * x) / jnp.tanh(p)
+
+
+def check_writable(directory):
+    """Fail fast if `directory` is not writable.
+
+    Called before fitting starts: a bad path or an exhausted disk quota should cost a
+    second, not a multi-hour job that dies at the final `pkl.dump`.
+    """
+    probe = os.path.join(directory, f'.writetest_{os.getpid()}')
+    try:
+        with open(probe, 'wb') as f:
+            f.write(b'ok')
+        os.remove(probe)
+    except OSError as e:
+        raise SystemExit(f'ERROR: cannot write results to {directory}: {e}')
+
+
+def to_numpy(obj):
+    """Recursively convert JAX arrays to NumPy inside containers.
+
+    Saved records are then plain NumPy/Python objects, so they load anywhere without
+    JAX installed and do not depend on JAX's pickle format staying stable.
+    """
+    if isinstance(obj, jnp.ndarray):
+        return np.asarray(obj)
+    if isinstance(obj, dict):
+        return {k: to_numpy(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return type(obj)(to_numpy(v) for v in obj)
+    return obj
 
 
 def pad_sequence(arr, target_len):
