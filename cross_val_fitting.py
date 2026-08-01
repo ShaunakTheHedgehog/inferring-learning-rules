@@ -34,11 +34,18 @@ import jax.random as jr
 import numpy as np
 
 from globals import MU_ALPHA, MU_BETA, RIDGE_LAMBDA, RIDGE_ALPHABETA
-from utils import get_nonlinearity, make_kfold_train_masks, tanh_p
+from utils import (get_nonlinearity, make_kfold_train_masks, tanh_p, flip_outputs,
+                   check_writable, to_numpy)
 from inference_utils import convert_weights_to_dict, get_num_alphas
 from inference_pipeline import (
     run_randomized_optimization_procedure,
     run_train_test_single_learning_forward_trajectory,
+)
+from reinforce_pipeline import (
+    NUM_WEIGHTS as RF_NUM_WEIGHTS,
+    REINFORCE_MODELS,
+    run_RF_randomized_optimization_procedure,
+    run_train_test_single_RF_forward_trajectory,
 )
 
 # model class name -> (inference_model, depth, nln_name), matching globals.MODEL_CLASS_INFO
@@ -47,6 +54,17 @@ MODEL_CLASSES = {
     '2L':  ('gd', 'two-layer', 'linear'),
     '2NL': ('gd', 'two-layer', 'erf'),
 }
+
+# Both model families are cross-validated by this script, on IDENTICAL folds: the fold
+# partition depends only on (fold_seed, mouse_id), never on the model, which is what
+# makes NN-vs-RF comparison paired. The families differ only in which optimizer runs,
+# which penalty terms apply, and the choice coding (see the flip in main()).
+ALL_MODELS = sorted(MODEL_CLASSES) + sorted(REINFORCE_MODELS)
+
+
+def model_family(model):
+    """'RF' for the REINFORCE models, 'NN' for the gradient-descent network models."""
+    return 'RF' if model in REINFORCE_MODELS else 'NN'
 
 
 def load_mouse_data(dataset_name):
@@ -68,36 +86,6 @@ def get_mouse_arrays(mouse_dict):
     return inputs, outputs, rewards
 
 
-def check_writable(directory):
-    """Fail fast if `directory` is not writable.
-
-    Called before fitting starts: a bad path or an exhausted disk quota should cost a
-    second, not a multi-hour job that dies at the final `pkl.dump`.
-    """
-    probe = os.path.join(directory, f'.writetest_{os.getpid()}')
-    try:
-        with open(probe, 'wb') as f:
-            f.write(b'ok')
-        os.remove(probe)
-    except OSError as e:
-        raise SystemExit(f'ERROR: cannot write results to {directory}: {e}')
-
-
-def to_numpy(obj):
-    """Recursively convert JAX arrays to NumPy inside containers.
-
-    Saved records are then plain NumPy/Python objects, so they load anywhere without
-    JAX installed and do not depend on JAX's pickle format staying stable.
-    """
-    if isinstance(obj, jnp.ndarray):
-        return np.asarray(obj)
-    if isinstance(obj, dict):
-        return {k: to_numpy(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return type(obj)(to_numpy(v) for v in obj)
-    return obj
-
-
 def build_task_list(mouse_ids, K):
     """Flat list of (mouse_id, fold) pairs indexed by SLURM array id.
 
@@ -110,20 +98,33 @@ def build_task_list(mouse_ids, K):
     return [(mid, k) for k in range(K) for mid in mouse_ids]
 
 
-def fit_one_fold(inputs, outputs, rewards, train_mask, depth, nln, inference_model,
+def fit_one_fold(inputs, outputs, rewards, train_mask, model, depth, nln, inference_model,
                  fit_key, args):
     """Run the randomized multi-seed fit on the training trials, then score the held-out fold."""
+    is_rf = model_family(model) == 'RF'
 
-    best_w0, min_objective_val, best_hyperparams_arr, optim_dict = run_randomized_optimization_procedure(
-        inputs, outputs, rewards, fit_key, depth, nln, inference_model,
-        batched=False, masked=True, train_mask=train_mask,
-        num_seeds=args.num_seeds, max_iters=args.max_iters, tol=args.tol,
-        alpha_init_scale=args.alpha_init_scale, beta_init_scale=args.beta_init_scale,
-        w0_init_scale=args.w0_init_scale,
-        ridge_lambda=args.ridge_lambda, alphabeta_ridge=args.alphabeta_ridge,
-        mu_alpha=args.mu_alpha, mu_beta=args.mu_beta,
-        explode_tol=args.explode_tol, burn_in_iters=args.burn_in_iters,
-    )
+    if is_rf:
+        best_w0, min_objective_val, best_hyperparams_arr, optim_dict = run_RF_randomized_optimization_procedure(
+            inputs, outputs, rewards, fit_key, model,
+            masked=True, train_mask=train_mask,
+            num_seeds=args.num_seeds, max_iters=args.max_iters, tol=args.tol,
+            alpha_init_scale=args.alpha_init_scale, c_init_scale=args.c_init_scale,
+            w0_init_scale=args.w0_init_scale,
+            ridge_lambda=args.ridge_lambda, ridge_alpha=args.ridge_alpha, ridge_c=args.ridge_c,
+            mu_alpha=args.mu_alpha, mu_c=args.mu_c,
+            explode_tol=args.explode_tol, burn_in_iters=args.burn_in_iters,
+        )
+    else:
+        best_w0, min_objective_val, best_hyperparams_arr, optim_dict = run_randomized_optimization_procedure(
+            inputs, outputs, rewards, fit_key, depth, nln, inference_model,
+            batched=False, masked=True, train_mask=train_mask,
+            num_seeds=args.num_seeds, max_iters=args.max_iters, tol=args.tol,
+            alpha_init_scale=args.alpha_init_scale, beta_init_scale=args.beta_init_scale,
+            w0_init_scale=args.w0_init_scale,
+            ridge_lambda=args.ridge_lambda, alphabeta_ridge=args.alphabeta_ridge,
+            mu_alpha=args.mu_alpha, mu_beta=args.mu_beta,
+            explode_tol=args.explode_tol, burn_in_iters=args.burn_in_iters,
+        )
 
     # `run_randomized_optimization_procedure` only reports a best fit among *converged*
     # seeds, returning None if none converged. Here we instead take the best finite
@@ -136,9 +137,13 @@ def fit_one_fold(inputs, outputs, rewards, train_mask, depth, nln, inference_mod
         best_idx = int(np.nanargmin(np.where(np.isfinite(objective_vals), objective_vals, np.nan)))
         best_hyperparams_arr = optim_dict['hyperparams'][best_idx]
         min_objective_val = objective_vals[best_idx]
-        # rebuild best_w0 too, so the record is complete regardless of convergence
-        num_alphas = get_num_alphas(inference_model, depth)
-        best_w0 = convert_weights_to_dict(best_hyperparams_arr[num_alphas + 1:])
+        # rebuild best_w0 too, so the record is complete regardless of convergence.
+        # RF weights are a flat (3,) vector; the NN weights are a pytree.
+        if is_rf:
+            best_w0 = best_hyperparams_arr[-RF_NUM_WEIGHTS:]
+        else:
+            num_alphas = get_num_alphas(inference_model, depth)
+            best_w0 = convert_weights_to_dict(best_hyperparams_arr[num_alphas + 1:])
         if not converged:
             print(f'WARNING: no seed converged; falling back to best finite seed '
                 f'(idx {best_idx}, objective {min_objective_val:.4f})', flush=True)
@@ -150,8 +155,12 @@ def fit_one_fold(inputs, outputs, rewards, train_mask, depth, nln, inference_mod
     train_nll = None
     test_nll = None
     if best_hyperparams_arr is not None:
-        tr, te, _, _ = run_train_test_single_learning_forward_trajectory(
-            best_hyperparams_arr, inputs, outputs, rewards, train_mask, nln, inference_model, None)
+        if is_rf:
+            tr, te, _, _ = run_train_test_single_RF_forward_trajectory(
+                best_hyperparams_arr, model, inputs, outputs, rewards, train_mask)
+        else:
+            tr, te, _, _ = run_train_test_single_learning_forward_trajectory(
+                best_hyperparams_arr, inputs, outputs, rewards, train_mask, nln, inference_model, None)
         train_nll, test_nll = float(tr), float(te)
 
     return dict(
@@ -169,8 +178,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     # what to fit
-    p.add_argument('--model', required=True, choices=sorted(MODEL_CLASSES),
-                   help='model class to fit')
+    p.add_argument('--model', required=True, choices=ALL_MODELS,
+                   help='model class to fit: 1L/2L/2NL (GD networks) or RF_*/ (REINFORCE)')
     p.add_argument('--dataset', default='witten', choices=['witten', 'saxe'])
     p.add_argument('--data_root', default='.',
                    help='directory containing <dataset>_data_GD_analysis_final/')
@@ -194,20 +203,31 @@ def main():
 
     # optimization
     p.add_argument('--num_seeds', type=int, default=200, help='random restarts per fold')
-    p.add_argument('--max_iters', type=int, default=1000, help='max L-BFGS iterations per restart')
+    p.add_argument('--max_iters', type=int, default=None,
+                   help='max L-BFGS iterations per restart (default: 1000 for NN, 2000 for RF)')
     p.add_argument('--tol', type=float, default=1e-3, help='gradient-norm convergence tolerance')
     p.add_argument('--fit_seed', type=int, default=0, help='PRNG seed for optimizer restarts')
     p.add_argument('--alpha_init_scale', type=float, default=1e-2)
-    p.add_argument('--beta_init_scale', type=float, default=5e1)
     p.add_argument('--w0_init_scale', type=float, default=1e-1)
     p.add_argument('--explode_tol', type=float, default=1e7)
     p.add_argument('--burn_in_iters', type=int, default=1_000)
+    p.add_argument('--beta_init_scale', type=float, default=5e1, help='NN only')
+    # RF only. c = alpha*beta is O(alpha), so an init scale of order 1 badly inflates the
+    # fitted intercept; 1e-4 keeps every restart near the plain-REINFORCE point c = 0.
+    p.add_argument('--c_init_scale', type=float, default=1e-4, help='RF only')
 
-    # regularization (defaults from globals.py)
-    p.add_argument('--ridge_lambda', type=float, default=RIDGE_LAMBDA)
-    p.add_argument('--alphabeta_ridge', type=float, default=RIDGE_ALPHABETA)
-    p.add_argument('--mu_alpha', type=float, default=MU_ALPHA)
-    p.add_argument('--mu_beta', type=float, default=MU_BETA)
+    # Regularization. The families take different penalty terms, so the two shared flags
+    # resolve to family-appropriate defaults below: NN uses the globals.py priors, RF is
+    # fit unregularized (pure MLE).
+    p.add_argument('--ridge_lambda', type=float, default=None,
+                   help=f'w0 ridge (default: {RIDGE_LAMBDA} for NN, 0 for RF)')
+    p.add_argument('--mu_alpha', type=float, default=None,
+                   help=f'log-alpha prior mean (default: {MU_ALPHA:.4f} for NN, 0 for RF)')
+    p.add_argument('--alphabeta_ridge', type=float, default=RIDGE_ALPHABETA, help='NN only')
+    p.add_argument('--mu_beta', type=float, default=MU_BETA, help='NN only')
+    p.add_argument('--ridge_alpha', type=float, default=0., help='RF only: ridge on log-alpha')
+    p.add_argument('--ridge_c', type=float, default=0., help='RF only: ridge on the intercept c')
+    p.add_argument('--mu_c', type=float, default=0., help='RF only: prior mean for c')
 
     # output
     p.add_argument('--out_dir', default='cross_val_results', help='root directory for results')
@@ -216,6 +236,15 @@ def main():
     p.add_argument('--dry_run', action='store_true',
                    help='tiny fitting budget for a fast end-to-end smoke test')
     args = p.parse_args()
+
+    # resolve the family-dependent defaults left as None above
+    family = model_family(args.model)
+    if args.max_iters is None:
+        args.max_iters = 2000 if family == 'RF' else 1000
+    if args.ridge_lambda is None:
+        args.ridge_lambda = 0.0 if family == 'RF' else RIDGE_LAMBDA
+    if args.mu_alpha is None:
+        args.mu_alpha = 0.0 if family == 'RF' else MU_ALPHA
 
     all_data = load_mouse_data(args.dataset)
     mouse_ids = sorted(all_data.keys())
@@ -247,8 +276,12 @@ def main():
     if args.dry_run:
         args.num_seeds, args.max_iters = 2, 20
 
-    inference_model, depth, nln_name = MODEL_CLASSES[args.model]
-    nln = get_nonlinearity(nln_name)
+    # the RF models carry none of the network structure (no depth / nonlinearity)
+    if family == 'RF':
+        inference_model, depth, nln_name, nln = None, None, None, None
+    else:
+        inference_model, depth, nln_name = MODEL_CLASSES[args.model]
+        nln = get_nonlinearity(nln_name)
 
     # fold_seed is part of the filename: a different seed is a different partition, so
     # results from separate seeds (repeated K-fold) must not silently collide.
@@ -271,6 +304,14 @@ def main():
     inputs, outputs, rewards = get_mouse_arrays(all_data[mouse_id])
     T = int(outputs.shape[0])
 
+    # THE CHOICE FLIP (RF only): the dataset codes 0 = right / 1 = left, but
+    # reinforce_pipeline.RF_log_likelihood treats 1 as a rightward choice. Without this
+    # the fitted right/left weights come out sign-mirrored. inputs is already
+    # [bias, right contrast, left contrast], matching w = (bias, right, left), and
+    # rewards are unaffected by the flip. The NN pipeline uses the native coding.
+    if family == 'RF':
+        outputs = jnp.asarray(flip_outputs(np.asarray(outputs)))
+
     # apply front-end saturating nonlinearity if specified
     if args.saturate_inputs:
         print(f'Using saturating nonlinearity on inputs', flush=True)
@@ -286,14 +327,15 @@ def main():
     train_mask = train_masks[fold]
     n_train, n_test = int(jnp.sum(train_mask)), int(jnp.sum(~train_mask))
 
+    spec = 'REINFORCE' if family == 'RF' else f'{depth}, {nln_name}'
     print(f'=== {args.dataset} mouse {mouse_id} | model {args.model} '
-          f'({depth}, {nln_name}) | fold {fold}/{args.K} ===', flush=True)
+          f'({spec}) | fold {fold}/{args.K} ===', flush=True)
     print(f'T={T} trials | train={n_train} test={n_test} '
           f'(held-out fraction {n_test/T:.3f})', flush=True)
 
     t0 = time.time()
-    result = fit_one_fold(inputs, outputs, rewards, train_mask, depth, nln, inference_model,
-                          jr.PRNGKey(args.fit_seed), args)
+    result = fit_one_fold(inputs, outputs, rewards, train_mask, args.model, depth, nln,
+                          inference_model, jr.PRNGKey(args.fit_seed), args)
     elapsed = time.time() - t0
 
     if result['test_nll'] is not None:
@@ -305,15 +347,17 @@ def main():
 
     record = dict(
         # identity
-        dataset=args.dataset, mouse_id=mouse_id, model=args.model,
+        dataset=args.dataset, mouse_id=mouse_id, model=args.model, family=family,
         inference_model=inference_model, depth=depth, nln_name=nln_name, saturate_inputs=args.saturate_inputs,
+        flipped_outputs=(family == 'RF'),
         # fold metadata (enough to reproduce the split exactly)
         fold=fold, K=args.K, block_length=args.block_length, fold_seed=args.fold_seed,
         train_mask=np.asarray(train_mask), num_trials=T, n_train=n_train, n_test=n_test,
-        # fit settings
+        # fit settings (only the active family's penalty terms are meaningful)
         num_seeds=args.num_seeds, max_iters=args.max_iters, tol=args.tol, fit_seed=args.fit_seed,
-        ridge_lambda=args.ridge_lambda, alphabeta_ridge=args.alphabeta_ridge,
-        mu_alpha=args.mu_alpha, mu_beta=args.mu_beta,
+        ridge_lambda=args.ridge_lambda, mu_alpha=args.mu_alpha,
+        alphabeta_ridge=args.alphabeta_ridge, mu_beta=args.mu_beta,
+        ridge_alpha=args.ridge_alpha, ridge_c=args.ridge_c, mu_c=args.mu_c,
         elapsed_sec=elapsed,
         **result,
     )
