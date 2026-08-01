@@ -546,6 +546,7 @@ def main():
     p.add_argument('--w0_init_scale', type=float, default=1e0)
     p.add_argument('--explode_tol', type=float, default=1e7)
     p.add_argument('--burn_in_iters', type=int, default=1_000)
+    p.add_argument('--print_diagnostics', action='store_true', help='print epsilon ball test results, grad, hessian')
 
     # regularization -- off by default, i.e. a pure MLE fit
     p.add_argument('--ridge_lambda', type=float, default=0., help='ridge on w0')
