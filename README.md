@@ -44,8 +44,8 @@ Additional analyses: K-fold cross-validation (`cross_val_fitting.py`, `cross_val
 
 We analyze two mouse datasets, which are not included in this repository:
 
-- **Pan-Vazquez et al. (2024)** (`'witten'` in the code; 35 mice) at `witten_data_GD_analysis_final/witten_mouse_data.pkl`
-- **Liebana et al. (2025)** (`'saxe'` in the code; 53 mice) at `saxe_data_GD_analysis_final/saxe_mouse_data.pkl`
+- **Pan-Vazquez et al. (2024)** (`'witten'` in the code; 22 mice) at `witten_data_GD_analysis_final/witten_mouse_data.pkl`
+- **Liebana et al. (2025)** (`'saxe'` in the code; 36 mice) at `saxe_data_GD_analysis_final/saxe_mouse_data.pkl`
 
 ## Setup
 
