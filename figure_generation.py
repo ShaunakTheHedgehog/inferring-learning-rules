@@ -30,16 +30,16 @@ from mouse_inference_data_analysis import (calculate_model_slope_fixed_grading, 
 from utils import convert_inds_to_grading_levels, generate_per_session_psychometrics, vectorized_generate_per_session_psychometrics, extract_specific_grading_levels
 from utils import calculate_simple_mouse_ma_bias, compute_r2_distribution, plot_psychometrics, visualize_r2_distributions
 from globals import (DATASET_TO_CHOICE_KEYWORD, EXPERT_THRESHOLD, MODEL_CLASS_INFO, MODEL_COLORS,
-                     MODEL_PLOT_NAMES, NUM_FINAL_SESSIONS, NUM_GRADING_LEVELS)
+                     MODEL_PLOT_NAMES, NUM_FINAL_SESSIONS, NUM_GRADING_LEVELS, ALL_SAXE_LEARNERS, ALL_WITTEN_LEARNERS)
 
 
 def generate_single_mouse_model_psychometrics(dataset_name, top_k, specific_grading_levels,
-                                              infer_inds=False):
+                                              infer_inds=False, keys=None):
     use_witten_scheme = (dataset_name == 'witten')
     if dataset_name == 'saxe':
         assert infer_inds, "Must infer inds since grading levels vary from mouse to mouse in Liebana et al. dataset."
 
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True)
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=keys)
     mouse_ids = list(all_mice_behav_dict.keys())
     for mouse_id in mouse_ids:
         mouse_dict = all_mice_behav_dict[mouse_id]
@@ -95,9 +95,9 @@ def generate_single_mouse_model_psychometrics(dataset_name, top_k, specific_grad
 
 
 def visualize_model_evolution(dataset_name, mouse_ids, grading=0.125, custom_slope_ticks=[-2., 0., 2., 4.], slope_ylim=(-2.2, 4.2),
-                              plot_slopes=True):
+                              plot_slopes=True, keys=None):
     base_filepath = f'{dataset_name}_data_GD_analysis_final/single_trial_results'
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True)
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=keys)
 
     for mouse_id in mouse_ids:
         mouse_dict = all_mice_behav_dict[mouse_id]
@@ -139,8 +139,8 @@ def visualize_model_evolution(dataset_name, mouse_ids, grading=0.125, custom_slo
    
 
 
-def visualize_reconstructed_accs(dataset_name, top_k, plot=True, save=True):
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True)
+def visualize_reconstructed_accs(dataset_name, top_k, plot=True, save=True, keys=None):
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=keys)
     mouse_ids = list(all_mice_behav_dict.keys())
 
     all_r2s = []
@@ -164,12 +164,12 @@ def visualize_reconstructed_accs(dataset_name, top_k, plot=True, save=True):
     all_r2s = np.asarray(all_r2s)    
 
     print(f'Num experts: {len(expert_idxs)} out of {len(mouse_ids)} total mice.')
-    make_2D_scatterplot(all_r2s, 'two-layer nonlinear', 'one-layer linear', expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_final/aggregate_results/reconstructed_accs/top{top_k}_R2_vs_onelayer.pdf', measure=r'$R^2$')
-    make_2D_scatterplot(all_r2s, 'two-layer nonlinear', 'two-layer linear', expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_final/aggregate_results/reconstructed_accs/top{top_k}_R2_vs_twolayer.pdf', measure=r'$R^2$')
+    make_2D_scatterplot(all_r2s, 'two-layer nonlinear', 'one-layer linear', expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_final/aggregate_results/reconstructed_accs/top{top_k}_R2_vs_onelayer_NEW.pdf', measure=r'$R^2$')
+    make_2D_scatterplot(all_r2s, 'two-layer nonlinear', 'two-layer linear', expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_final/aggregate_results/reconstructed_accs/top{top_k}_R2_vs_twolayer_NEW.pdf', measure=r'$R^2$')
 
 
-def visualize_trialwise_accs(dataset_name, top_k, stage_length=2_000,window=100, stride=25, ymin=0.4):
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True)
+def visualize_trialwise_accs(dataset_name, top_k, stage_length=2_000,window=100, stride=25, ymin=0.4, keys=None):
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=keys)
     mouse_ids = list(all_mice_behav_dict.keys())
 
     rightbiased_experts = []
@@ -238,11 +238,44 @@ def generate_aggregate_model_statistics(dataset_name, remove_bad_idxs=True):
 
 if __name__ == "__main__":
 
-    dataset_name = 'witten'
+    # dataset_name = 'witten'
+    # keys = WITTEN_LEARNERS
     max_contrast = 1.
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True)
-    mouse_ids = list(all_mice_behav_dict.keys())
-    top_k = 100
+    # all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=keys)
+    # mouse_ids = list(all_mice_behav_dict.keys())
+    # top_k = 100
+
+    # mouse_id = 35
+    # # load in behav data 
+    # behav_data = all_mice_behav_dict[mouse_id]
+    # trials_per_session = behav_data['trials_per_session']
+    # print(trials_per_session)
+
+    # visualize_reconstructed_accs('witten', top_k=top_k, plot=False, save=True, keys=keys)
+    
+    # aic_data, _, expert_idxs = generate_model_nll_comparison('witten', get_aic_per_trial=True, remove_bad_idxs=True, keys=ALL_WITTEN_LEARNERS)
+    # print(1./0)
+
+    # from globals import SAXE_LEARNERS 
+    # # count number of experts in saxe learners
+    # all_mice_behav_dict = load_data('saxe', remove_bad_idxs=True, keys=SAXE_LEARNERS)
+    # mouse_ids = list(all_mice_behav_dict.keys())
+    # num_experts = 0
+    # for mouse_id in mouse_ids:
+    #     expert = check_expert_status(all_mice_behav_dict[mouse_id], threshold=EXPERT_THRESHOLD, num_final_sessions=NUM_FINAL_SESSIONS)
+    #     if expert:
+    #         num_experts += 1
+    # print(f'Number of experts in SAXE learners: {num_experts} out of {len(mouse_ids)}')
+
+    # print(1./0)
+
+    dataset_name = 'witten'
+    keys = ALL_WITTEN_LEARNERS
+    aic_data, _, expert_idxs = generate_model_nll_comparison(dataset_name, get_aic_per_trial=True, remove_bad_idxs=True, keys=keys)
+    make_jitterplot(aic_data, expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_final/aggregate_results/rel_aic_jitterplot_NEW_UNCOLORED.pdf', plot_sem=True, custom_yticks=[0., 0.1, 0.2], ticksize=25)
+    # print(1./0)
+
+    # generate_aggregate_model_metrics('saxe', plot_pc_idx1=2, plot_pc_idx2=3, remove_bad_idxs=True, keys=keys)
 
     # generate_single_mouse_model_psychometrics(dataset_name, top_k=100, specific_grading_levels=None,
     #                                             infer_inds=True)   
@@ -262,4 +295,4 @@ if __name__ == "__main__":
     #     expert = check_expert_status(all_mice_behav_dict[mouse_id], threshold=EXPERT_THRESHOLD, num_final_sessions=NUM_FINAL_SESSIONS)
     #     print(f'Mouse {mouse_id}, Expert: {expert}')
 
-    generate_aggregate_model_statistics('saxe', remove_bad_idxs=True)
+    # generate_aggregate_model_statistics('saxe', remove_bad_idxs=True)

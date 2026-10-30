@@ -40,17 +40,20 @@ from inference_pipeline import run_single_learning_forward_trajectory, compute_n
 from globals import (DATASET_TO_CHOICE_KEYWORD, DEPTH_TO_NUM_WEIGHTS, EXPERT_THRESHOLD, MODEL_CLASS_INFO,
                      MODEL_PLOT_NAMES, MU_ALPHA, MU_BETA, NUM_FINAL_SESSIONS, NUM_GRADING_LEVELS,
                      NUM_ONE_LAYER_WEIGHTS, NUM_TWO_LAYER_WEIGHTS, RIDGE_ALPHABETA, RIDGE_LAMBDA,
-                     SAXE_BAD_IDXS, WITTEN_DATA_CONTRAST_LEVELS)
+                     SAXE_BAD_IDXS, WITTEN_DATA_CONTRAST_LEVELS, ALL_SAXE_LEARNERS, ALL_WITTEN_LEARNERS)
 from metric_GD_network import fit_metric_GD_net, generate_metric_GD_train_test_split
 
 
-def load_data(dataset_name, remove_bad_idxs=True):
+def load_data(dataset_name, remove_bad_idxs=True, keys=None):
     assert dataset_name in ['witten', 'saxe'], f'Invalid dataset name: {dataset_name}'
     with open(f'{dataset_name}_data_GD_analysis_final/{dataset_name}_mouse_data.pkl', 'rb') as f:
         data = pkl.load(f)
 
-    if dataset_name == 'saxe' and remove_bad_idxs:
-        data = {k: v for k, v in data.items() if k not in SAXE_BAD_IDXS}
+    if keys is None:
+        if dataset_name == 'saxe' and remove_bad_idxs:
+            data = {k: v for k, v in data.items() if k not in SAXE_BAD_IDXS}
+    else:
+        data = {k: v for k, v in data.items() if k in keys}
 
     return data
 
@@ -101,13 +104,13 @@ def get_mouse_aics(dataset_name, mouse_id):
         outputs = results_dict['outputs'].astype(jnp.int32)
         rewards = results_dict['rewards']
         nll = compute_nll(x0, inputs, outputs, rewards, nln, inference_model, batched=False, alpha_W1=None, num_weights=DEPTH_TO_NUM_WEIGHTS[depth], ridge_lambda=0., alphabeta_ridge=0.)
-        
+
         mouse_aics.append(2 * nll + 2 * num_params)
         mouse_nlls.append(nll)
     
     return mouse_aics, mouse_nlls
 
-def plot_linear_correlation(arr1, arr2, xlabel, ylabel, filepath=None, figsize=(5, 4), labelsize=14, ticksize=16):
+def plot_linear_correlation(arr1, arr2, xlabel, ylabel, filepath=None, figsize=(5, 4), labelsize=14, ticksize=16, tag=''):
     fig, ax = plt.subplots(figsize=figsize)
 
     ax.scatter(arr1, arr2, color="#081523", s=100, alpha=1.0,
@@ -132,11 +135,11 @@ def plot_linear_correlation(arr1, arr2, xlabel, ylabel, filepath=None, figsize=(
     if filepath is None:
         plt.show()
     else:
-        fig.savefig(f'{filepath}/linear_plot_{xlabel}_vs_{ylabel}.pdf',
+        fig.savefig(f'{filepath}/linear_plot_{xlabel}_vs_{ylabel}{tag}.pdf',
                     dpi=300, bbox_inches='tight')
 
 
-def plot_top_PCs(top_eigvecs, filepath=None):
+def plot_top_PCs(top_eigvecs, filepath=None, tag=''):
     COLORS = ['#00838F', '#AD1457', '#F9A825']  # teal, magenta, gold
     LABELS = ['PC 1', 'PC 2', 'PC 3']
     OFFSET = 2.5  # vertical separation between traces; tune to taste
@@ -177,11 +180,11 @@ def plot_top_PCs(top_eigvecs, filepath=None):
     if filepath is None:
         plt.show()
     else:
-        fig.savefig(f'{filepath}/top_hyperparam_PCs.pdf', dpi=300, bbox_inches='tight')
+        fig.savefig(f'{filepath}/top_hyperparam_PCs{tag}.pdf', dpi=300, bbox_inches='tight')
 
         
 
-def plot_PC_heatmap(plot_pc1, plot_pc2, plot_pc_idx1, plot_pc_idx2, color_feature, feature_name, filepath=None, cmap=None):
+def plot_PC_heatmap(plot_pc1, plot_pc2, plot_pc_idx1, plot_pc_idx2, color_feature, feature_name, filepath=None, cmap=None, tag=''):
     assert feature_name in ['avg_acc_score', 'ma_bias']
     label = 'Normalized Accuracy'
     if feature_name == 'ma_bias':
@@ -213,7 +216,7 @@ def plot_PC_heatmap(plot_pc1, plot_pc2, plot_pc_idx1, plot_pc_idx2, color_featur
     if filepath is None:
         plt.show()
     else:
-        fig.savefig(f'{filepath}/{feature_name}_PC_heatmap.pdf', dpi=300, bbox_inches='tight')
+        fig.savefig(f'{filepath}/{feature_name}_PC_heatmap{tag}.pdf', dpi=300, bbox_inches='tight')
 
 
 def check_expert_status(mouse_dict, threshold=EXPERT_THRESHOLD, num_final_sessions=NUM_FINAL_SESSIONS):
@@ -434,30 +437,6 @@ def get_model_lls_from_best_matching_outputs(all_inferred_hyperparams, inputs, o
     max_k_session_lls = np.max(k_best_session_lls, axis=0)
 
     return avg_k_session_lls, min_k_session_lls, max_k_session_lls
-
-
-
-# def compute_squared_RPEs(inferred_hyperparams, inputs, outputs, rewards, nln, inference_model, trials_per_session=None):
-#     _, ws, _ = run_single_learning_forward_trajectory(inferred_hyperparams, inputs, outputs, rewards, 
-#                                                    nln, inference_model, alpha_W1=None)
-    
-#     all_outs = batched_model_forward(ws, inputs, nln)   # shape: T x 2
-#     preds = all_outs[jnp.arange(len(outputs)), outputs]  # shape: T
-#     RPEs = (rewards - preds)**2
-#     avg_RPEs_by_session = None 
-
-#     if trials_per_session is not None:
-#         session_endpts = np.cumsum(trials_per_session)
-#         avg_RPEs_by_session = []
-#         start_idx = 0
-#         for end_idx in session_endpts:
-#             session_RPEs = RPEs[start_idx:end_idx]
-#             avg_session_RPE = jnp.mean(session_RPEs)
-#             avg_RPEs_by_session.append(avg_session_RPE)
-#             start_idx = end_idx
-#         avg_RPEs_by_session = jnp.array(avg_RPEs_by_session)
-    
-#     return RPEs, avg_RPEs_by_session
 
 
 def calculate_slope_fixed_grading(grading, inputs, outputs, trials_per_session, num_grading_levels, nonzero_gradings=WITTEN_DATA_CONTRAST_LEVELS):
@@ -783,16 +762,16 @@ def plot_single_trial_nlls(nll_data, mouse_ids, trial_idxs,
 
 
 def explore_expert_metrics(dataset_name, depth, nln_name, inference_model='gd', filepath=None,
-                           plot_pc_idx1=1, plot_pc_idx2=2, final_window=500, remove_bad_idxs=True):
+                           plot_pc_idx1=1, plot_pc_idx2=2, final_window=500, remove_bad_idxs=True, keys=None):
     
     assert dataset_name in ['witten', 'saxe', 'witten_and_saxe']
 
     if dataset_name != 'witten_and_saxe':
-        all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs)
+        all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs, keys=keys)
         mouse_ids = list(all_mice_behav_dict.keys())
     else:
-        all_mice_behav_dict_witten = load_data('witten', remove_bad_idxs=remove_bad_idxs)
-        all_mice_behav_dict_saxe = load_data('saxe', remove_bad_idxs=remove_bad_idxs)
+        all_mice_behav_dict_witten = load_data('witten', remove_bad_idxs=remove_bad_idxs, keys=ALL_WITTEN_LEARNERS)
+        all_mice_behav_dict_saxe = load_data('saxe', remove_bad_idxs=remove_bad_idxs, keys=ALL_SAXE_LEARNERS)
         all_mice_behav_dict = {**all_mice_behav_dict_witten, **all_mice_behav_dict_saxe}
         mouse_ids = list(all_mice_behav_dict.keys())
 
@@ -850,18 +829,20 @@ def explore_expert_metrics(dataset_name, depth, nln_name, inference_model='gd', 
 
     hyperparams_collection = np.array(hyperparams_collection)
 
-    
-    plot_alpha_beta_scatterplot(dataset_name, alphas, betas, final_accs, color_quantity=np.abs(ma_biases), 
-                                expert_mice=expert_mice, cmap='YlOrRd', vmin=0., vmax=1., 
-                                ylabel='Average Final Accuracy', color_label='|Bias|', nln_name=nln_name, depth=depth, figsize=(8, 4), 
-                                ylims=(final_accs.min()-0.05, 1.), yticks=[0., 0.25, 0.5, 0.75, 1.0], filepath=f'{filepath}/alpha_beta_vs_final_acc.pdf')
-
+    print(len(alphas))
+    # plot_alpha_beta_scatterplot(dataset_name, alphas, betas, final_accs, color_quantity=np.abs(ma_biases), 
+    #                             expert_mice=expert_mice, cmap='YlOrRd', vmin=0., vmax=1., 
+    #                             ylabel='Average Final Accuracy', color_label='|Bias|', nln_name=nln_name, depth=depth, figsize=(8, 4), 
+    #                             ylims=(final_accs.min()-0.05, 1.), yticks=[0., 0.25, 0.5, 0.75, 1.0], filepath=None)#filepath=f'{filepath}/alpha_beta_vs_final_acc.pdf')
+    # print(1./0)
     
     plot_alpha_beta_scatterplot(dataset_name, alphas, betas, avg_trial_weighted_accs, color_quantity=np.abs(ma_biases), 
                                 expert_mice=expert_mice, cmap='YlOrRd', vmin=0., vmax=1., 
                                 ylabel='Normalized Accuracy', color_label='|Bias|', nln_name=nln_name, depth=depth, 
-                                figsize=(8, 4), ylims=(avg_trial_weighted_accs.min()-0.05, avg_trial_weighted_accs.max()+0.05), yticks=[-0.5, -0.25,0., 0.25, 0.5, 0.75, 1.0], filepath=f'{filepath}/alpha_beta_vs_avg_trial_weighted_normalized_accs.pdf')
-
+                                figsize=(8, 4), ylims=(avg_trial_weighted_accs.min()-0.05, avg_trial_weighted_accs.max()+0.05), yticks=[-0.5, -0.25,0., 0.25, 0.5, 0.75, 1.0], filepath=f'{filepath}/alpha_beta_vs_avg_trial_weighted_normalized_accs_NEW.pdf')
+    # print(1./0)
+    plot_linear_correlation(np.abs(ma_biases), avg_trial_weighted_accs, '|Bias|', 'Normalized Accuracy', filepath=filepath, labelsize=21, ticksize=20, figsize=(5, 5), tag='_NEW')
+    # print(1./0)
 
     pca = PCA()
     pca.fit(hyperparams_collection)
@@ -870,7 +851,9 @@ def explore_expert_metrics(dataset_name, depth, nln_name, inference_model='gd', 
     print(var_explained)
 
     top_eigvecs = pca.components_[:3, :]
-    plot_top_PCs(top_eigvecs, filepath=filepath)    
+    plot_top_PCs(top_eigvecs, filepath=filepath, tag='_NEW')    
+
+    # print(1./0)
 
     pcs = pca.transform(hyperparams_collection)
     pc1 = pcs[:, 0]
@@ -887,60 +870,61 @@ def explore_expert_metrics(dataset_name, depth, nln_name, inference_model='gd', 
         plot_alpha_beta_scatterplot(dataset_name, alphas, betas, avg_trial_weighted_accs, color_quantity=c, 
                                     expert_mice=expert_mice, cmap='YlOrRd_r', vmin=0., vmax=c.max(), 
                                     ylabel='Normalized Accuracy', color_label=f'Magnitude of PCs {plot_pc_idx1} & {plot_pc_idx2}', nln_name=nln_name, depth=depth, 
-                                    figsize=(8, 4), ylims=(avg_trial_weighted_accs.min()-0.05, avg_trial_weighted_accs.max()+0.05), yticks=[-0.5, -0.25, 0., 0.25, 0.5, 0.75, 1.0], filepath=f'{filepath}/all_hyperparams_vs_Normalized Accuracy.pdf', cticks=[0., 2., 4, 6., 8.])
+                                    figsize=(8, 4), ylims=(avg_trial_weighted_accs.min()-0.05, avg_trial_weighted_accs.max()+0.05), yticks=[-0.5, -0.25, 0., 0.25, 0.5, 0.75, 1.0], cticks=[0., 2., 4, 6., 8.], filepath=f'{filepath}/all_hyperparams_vs_Normalized Accuracy_NEW.pdf')
         
         plot_alpha_beta_scatterplot(dataset_name, alphas, betas, np.abs(ma_biases), color_quantity=c, 
                                         expert_mice=expert_mice, cmap='YlOrRd_r', vmin=0., vmax=c.max(), 
                                         ylabel='|Bias|', color_label=f'Magnitude of PCs {plot_pc_idx1} & {plot_pc_idx2}', nln_name=nln_name, depth=depth, 
-                                        figsize=(8, 4), ylims=(0., np.abs(ma_biases).max()+0.05), yticks=[0., 0.25, 0.5, 0.75, 1.0], filepath=f'{filepath}/all_hyperparams_vs_|Bias|.pdf', cticks=[0., 2., 4, 6., 8.])
+                                        figsize=(8, 4), ylims=(0., np.abs(ma_biases).max()+0.05), yticks=[0., 0.25, 0.5, 0.75, 1.0], cticks=[0., 2., 4, 6., 8.], filepath=f'{filepath}/all_hyperparams_vs_|Bias|_NEW.pdf')
         
 
-        plot_linear_correlation(c, avg_trial_weighted_accs, r'$\sqrt{PC1^2 + PC2^2}$', f'Normalized \nAccuracy', filepath=filepath, figsize=(5, 5), labelsize=21, ticksize=20)
-        plot_linear_correlation(c, np.abs(ma_biases), r'$\sqrt{PC1^2 + PC2^2}$', f'|Bias|', filepath=filepath, figsize=(5, 5), labelsize=21, ticksize=20)
+        plot_linear_correlation(c, avg_trial_weighted_accs, r'$\sqrt{PC1^2 + PC2^2}$', f'Normalized \nAccuracy', filepath=filepath, figsize=(5, 5), labelsize=21, ticksize=20, tag='_NEW')
+        plot_linear_correlation(c, np.abs(ma_biases), r'$\sqrt{PC1^2 + PC2^2}$', f'|Bias|', filepath=filepath, figsize=(5, 5), labelsize=21, ticksize=20, tag='_NEW')
 
-        plot_PC_heatmap(plot_pc1, plot_pc2, plot_pc_idx1, plot_pc_idx2, avg_trial_weighted_accs, feature_name='avg_acc_score', filepath=filepath, cmap='YlOrRd_r')
+        plot_PC_heatmap(plot_pc1, plot_pc2, plot_pc_idx1, plot_pc_idx2, avg_trial_weighted_accs, feature_name='avg_acc_score', filepath=filepath, cmap='YlOrRd_r', tag='_NEW')
 
-        plot_PC_heatmap(plot_pc1, plot_pc2, plot_pc_idx1, plot_pc_idx2, np.abs(ma_biases), feature_name='ma_bias', filepath=filepath, cmap='YlOrRd')
+        plot_PC_heatmap(plot_pc1, plot_pc2, plot_pc_idx1, plot_pc_idx2, np.abs(ma_biases), feature_name='ma_bias', filepath=filepath, cmap='YlOrRd', tag='_NEW')
 
     if dataset_name == 'saxe' and nln_name == 'erf':
         # check for correlations of acc and bias with initial first-layer stimulus weights
-        plot_linear_correlation(np.abs(hyperparams_collection[:, 3]), avg_trial_weighted_accs, 'Layer-1 Right', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
-        plot_linear_correlation(np.abs(hyperparams_collection[:, 4]), avg_trial_weighted_accs, 'Layer-1 Left', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
-        
-        plot_linear_correlation(np.abs(hyperparams_collection[:, 3]), np.abs(ma_biases), 'Layer-1 Right', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
-        plot_linear_correlation(np.abs(hyperparams_collection[:, 4]), np.abs(ma_biases), 'Layer-1 Left', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
+        plot_linear_correlation(np.abs(hyperparams_collection[:, 3]), avg_trial_weighted_accs, 'Layer-1 Right', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
+        plot_linear_correlation(np.abs(hyperparams_collection[:, 4]), avg_trial_weighted_accs, 'Layer-1 Left', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
+
+        plot_linear_correlation(np.abs(hyperparams_collection[:, 3]), np.abs(ma_biases), 'Layer-1 Right', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
+        plot_linear_correlation(np.abs(hyperparams_collection[:, 4]), np.abs(ma_biases), 'Layer-1 Left', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
 
         layer_one_strength = np.sqrt(hyperparams_collection[:, 3]**2 + hyperparams_collection[:, 4]**2)
         plot_alpha_beta_scatterplot(dataset_name, alphas, betas, avg_trial_weighted_accs, color_quantity=layer_one_strength, 
                                     expert_mice=expert_mice, cmap='YlOrRd_r', vmin=0., vmax=layer_one_strength.max(), 
                                     ylabel='Normalized Accuracy', color_label=f'Magnitude of Layer-1 Stim Weights', nln_name=nln_name, depth=depth, 
-                                    figsize=(8, 4), ylims=(avg_trial_weighted_accs.min()-0.05, avg_trial_weighted_accs.max()+0.05), yticks=[-0.5, -0.25, 0., 0.25, 0.5, 0.75, 1.0], filepath=f'{filepath}/layer_one_and_alpha_and_beta_vs_Normalized Accuracy.pdf', cticks=[0., 2., 4, 6., 8.])
+                                    figsize=(8, 4), ylims=(avg_trial_weighted_accs.min()-0.05, avg_trial_weighted_accs.max()+0.05), yticks=[-0.5, -0.25, 0., 0.25, 0.5, 0.75, 1.0], filepath=f'{filepath}/layer_one_and_alpha_and_beta_vs_Normalized Accuracy_NEW.pdf', cticks=[0., 2., 4, 6., 8.])
 
 
-    plot_linear_correlation(np.abs(pc1), avg_trial_weighted_accs, '|PC 1|', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
-    plot_linear_correlation(np.abs(pc2), avg_trial_weighted_accs, '|PC 2|', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
-    plot_linear_correlation(np.abs(pc3), avg_trial_weighted_accs, '|PC 3|', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
-
-    plot_linear_correlation(np.abs(ma_biases), avg_trial_weighted_accs, '|Bias|', 'Normalized Accuracy', filepath=filepath, labelsize=21, ticksize=20, figsize=(5, 5))
-
-    plot_linear_correlation(np.abs(pc1), np.abs(ma_biases), '|PC 1|', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
-    plot_linear_correlation(np.abs(pc2), np.abs(ma_biases), '|PC 2|', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
-    plot_linear_correlation(np.abs(pc3), np.abs(ma_biases), '|PC 3|', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22)
+    plot_linear_correlation(np.abs(pc1), avg_trial_weighted_accs, '|PC 1|', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
+    plot_linear_correlation(np.abs(pc2), avg_trial_weighted_accs, '|PC 2|', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
+    plot_linear_correlation(np.abs(pc3), avg_trial_weighted_accs, '|PC 3|', f'Normalized \nAccuracy', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
 
 
+    plot_linear_correlation(np.abs(pc1), np.abs(ma_biases), '|PC 1|', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
+    plot_linear_correlation(np.abs(pc2), np.abs(ma_biases), '|PC 2|', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
+    plot_linear_correlation(np.abs(pc3), np.abs(ma_biases), '|PC 3|', '|Bias|', filepath=filepath, figsize=(6, 3), labelsize=24, ticksize=22, tag='_NEW')
 
-def generate_aggregate_model_metrics(dataset_name, plot_pc_idx1=1, plot_pc_idx2=2, remove_bad_idxs=True):
+
+
+def generate_aggregate_model_metrics(dataset_name, plot_pc_idx1=1, plot_pc_idx2=2, remove_bad_idxs=True, keys=None):
     erf_directory = f'{dataset_name}_data_GD_analysis_final/aggregate_results/gd_erf_two-layer'
     explore_expert_metrics(dataset_name, depth='two-layer', nln_name='erf', inference_model='gd', filepath=erf_directory,
-                           plot_pc_idx1=plot_pc_idx1, plot_pc_idx2=plot_pc_idx2, remove_bad_idxs=remove_bad_idxs)
-    
+                           plot_pc_idx1=plot_pc_idx1, plot_pc_idx2=plot_pc_idx2, remove_bad_idxs=remove_bad_idxs, keys=keys)
+
     print('Done with 2-layer nonlinear, starting 2-layer linear...')
+
     explore_expert_metrics(dataset_name, depth='two-layer', nln_name='linear', inference_model='gd', filepath=f'{dataset_name}_data_GD_analysis_final/aggregate_results/gd_linear_two-layer',
-                           plot_pc_idx1=plot_pc_idx1, plot_pc_idx2=plot_pc_idx2)
-    
+                           plot_pc_idx1=plot_pc_idx1, plot_pc_idx2=plot_pc_idx2, keys=keys)
+
     print('Done with 2-layer linear, starting 1-layer linear...')
+
     explore_expert_metrics(dataset_name, depth='one-layer', nln_name='linear', inference_model='gd', filepath=f'{dataset_name}_data_GD_analysis_final/aggregate_results/gd_linear_one-layer',
-                           plot_pc_idx1=plot_pc_idx1, plot_pc_idx2=plot_pc_idx2)
+                           plot_pc_idx1=plot_pc_idx1, plot_pc_idx2=plot_pc_idx2, keys=keys)
 
 
 def make_single_mouse_aic_plot(dataset_name, mouse_id, save_path=None):
@@ -976,13 +960,13 @@ def make_single_mouse_aic_plot(dataset_name, mouse_id, save_path=None):
         plt.show()
 
 
-def generate_model_nll_comparison(dataset_name, get_aic_per_trial=False, remove_bad_idxs=True):
+def generate_model_nll_comparison(dataset_name, get_aic_per_trial=False, remove_bad_idxs=True, keys=None):
     assert dataset_name in ['witten', 'saxe']
     nll_data = []
     aic_data = []
 
     expert_idxs = []
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs)
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs, keys=keys)
     mouse_ids = list(all_mice_behav_dict.keys())
 
     for i in range(len(mouse_ids)):
@@ -1037,7 +1021,7 @@ def make_jitterplot(data, expert_idxs, save_path=None,
                     plot_type='aic_per_trial', ylabel=r'$\Delta$AIC', show_median=False, 
                     plot_sem=False, plot_ordering=[0, 1, 2], show_legend=False, ticksize=19,
                     custom_yticks=None):
-    assert plot_type in ['aic_per_trial', 'r2']
+    # assert plot_type in ['aic_per_trial', 'r2']
     MODEL_COLORS = ['#2166AC', '#F4A736', '#2CA02C']  # blue, orange, green
     MODEL_NAMES  = ['1-layer Linear', '2-layer Linear', '2-layer Nonlinear']
     MODEL_TO_IDX = {'one-layer linear gd': 0, 'two-layer linear gd': 1, 'two-layer erf gd': 2}
@@ -1097,8 +1081,8 @@ def make_jitterplot(data, expert_idxs, save_path=None,
         axes[plot_idx].set_axisbelow(True)
 
         for mean, median, sem, color, linestyle in [
-            (diffs[non_expert_idxs].mean(), np.median(diffs[non_expert_idxs]), diffs[non_expert_idxs].std() / np.sqrt(len(non_expert_idxs)), NONEXPERT_MEAN_COLOR, 'solid'),
-            (diffs[expert_idxs].mean(), np.median(diffs[expert_idxs]), diffs[expert_idxs].std() / np.sqrt(len(expert_idxs)), EXPERT_MEAN_COLOR, 'solid'),
+            (diffs[non_expert_idxs].mean(), np.median(diffs[non_expert_idxs]), diffs[non_expert_idxs].std(ddof=1) / np.sqrt(len(non_expert_idxs)), NONEXPERT_MEAN_COLOR, 'solid'),
+            (diffs[expert_idxs].mean(), np.median(diffs[expert_idxs]), diffs[expert_idxs].std(ddof=1) / np.sqrt(len(expert_idxs)), EXPERT_MEAN_COLOR, 'solid'),
         ]:
             if show_median:
                 axes[plot_idx].hlines(median, -bar_width, bar_width,
@@ -1366,7 +1350,7 @@ def get_stage_accs(dataset_name, mouse_id, stage, stage_length, top_k, window, s
 
 
 def get_pearson_r2_for_accs(dataset_name, mouse_id, stage, stage_length, top_k, window, 
-                            sampling_type='deterministic', remove_bad_idxs=True):
+                            sampling_type='deterministic', remove_bad_idxs=True, keys=None):
     assert (dataset_name == 'witten') or (dataset_name == 'saxe')
     assert sampling_type in ['MAP', 'deterministic']
 
@@ -1374,7 +1358,7 @@ def get_pearson_r2_for_accs(dataset_name, mouse_id, stage, stage_length, top_k, 
     file_identifier = f'mouse_{mouse_id}'
 
     choice_keyword = DATASET_TO_CHOICE_KEYWORD[dataset_name]
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs)
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs, keys=keys)
     
     mouse_behav_dict = all_mice_behav_dict[mouse_id]
 
@@ -1411,7 +1395,7 @@ def get_reconstructed_running_accs(dataset_name, mouse_id,
                                     top_k, window, stride, sampling_type='deterministic', 
                                     xmin=0, xmax=None, plot=True, legend=False, save=True,
                                     plot_filepath=None, custom_xticks=None, error_bars='minmax',
-                                    remove_bad_idxs=True):
+                                    remove_bad_idxs=True, keys=None):
     assert (dataset_name == 'witten') or (dataset_name == 'saxe')
     assert sampling_type in ['MAP', 'deterministic']
     assert error_bars in ['minmax', 'sem', 'std']
@@ -1422,7 +1406,7 @@ def get_reconstructed_running_accs(dataset_name, mouse_id,
     file_identifier = f'mouse_{mouse_id}'
 
     choice_keyword = DATASET_TO_CHOICE_KEYWORD[dataset_name]
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs)
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs, keys=keys)
     
     mouse_behav_dict = all_mice_behav_dict[mouse_id]
 
@@ -1617,85 +1601,14 @@ def plot_acc_alignment_distributions(dataset_name, mouse_ids,
     return mean_r2 #, mean_mse
     
 
-def plot_l1_distances(l1_data, expert_idxs=None, filepath=None,
-                      plot_type='all'):
-    """
-    l1_data : array of shape (num_mice, num_models, 10)
-    """
 
-    assert plot_type in ['all', 'expert', 'non-expert']
-    if plot_type == 'expert':
-        l1_data = l1_data[expert_idxs]
-    if plot_type == 'non-expert':
-        nonexpert_idxs = [idx for idx in range(len(l1_data)) if idx not in expert_idxs]
-        l1_data = l1_data[nonexpert_idxs]
-
-    MODEL_NAMES  = ['1-Layer\nLinear', '2-Layer\nLinear', '2-Layer\nNonlinear']
-
-    # Per-mouse mean L1 across the 10 retrains
-    mouse_means = l1_data.mean(axis=2)   # (num_mice, num_models)
-    n_mice, n_models = mouse_means.shape
-    xs = np.arange(n_models)
-
-    fig, ax = plt.subplots(figsize=(7, 5))
-
-    jitter = np.random.default_rng(42).uniform(-0.08, 0.08, size=(n_mice,))
-
-    # Connecting lines (one per mouse)
-    for i in range(n_mice):
-        ax.plot(xs + jitter[i], mouse_means[i], color='gray', lw=0.6, alpha=0.3, zorder=1)
-
-    # Dots per mouse per model
-    for j, (color, name) in enumerate(zip(MODEL_COLORS, MODEL_NAMES)):
-        ax.scatter(xs[j] + jitter, mouse_means[:, j],
-                   color=color, s=22, alpha=1.0,
-                   edgecolors='white', linewidths=0.3, zorder=3)
-        if plot_type == 'expert':
-            ax.scatter(xs[j] + jitter, mouse_means[:, j],
-                       facecolors='none', edgecolors='black',
-                       s=22, linewidths=1.0, zorder=5)
-
-    # Mean ± SEM bar per model
-    for j, color in enumerate(MODEL_COLORS):
-        mean = mouse_means[:, j].mean()
-        sem  = mouse_means[:, j].std() / np.sqrt(n_mice)
-        ax.hlines(mean, xs[j] - 0.2, xs[j] + 0.2,
-                  colors=color, linewidth=2.5, zorder=4)
-        ax.vlines(xs[j], mean - sem, mean + sem,
-                  colors=color, linewidth=1.5, zorder=4)
-
-    # Expert outlines
-    if plot_type == 'all' and expert_idxs is not None:
-        for j in range(n_models):
-            ax.scatter(xs[j] + jitter[expert_idxs], mouse_means[expert_idxs, j],
-                       facecolors='none', edgecolors='black',
-                       s=22, linewidths=1.0, zorder=5)
-
-    ax.set_xticks(xs)
-    ax.set_xticklabels(MODEL_NAMES, fontsize=19.5)
-    ax.set_ylabel('L1 Distance', fontsize=19.5)
-    ax.set_xlim(-0.5, n_models - 0.5)
-
-    ax.spines[['top', 'right']].set_visible(False)
-    ax.spines[['left', 'bottom']].set_linewidth(0.8)
-    ax.tick_params(labelsize=18, length=3, width=0.8)
-    ax.yaxis.grid(True, linestyle=':', linewidth=0.5, color='#e0e0e0', zorder=0)
-    ax.set_axisbelow(True)
-
-    plt.tight_layout()
-    if filepath is not None:
-        fig.savefig(filepath, dpi=300, bbox_inches='tight')
-    plt.show()
-
-
-
-def plot_bias_distribution_results(dataset_name, mouse_id, sampling_type, num_bins=30, remove_bad_idxs=True):
+def plot_bias_distribution_results(dataset_name, mouse_id, sampling_type, num_bins=30, remove_bad_idxs=True, keys=None):
 
     file_identifier = f'mouse_{mouse_id}'
     sampling_tag = get_sampling_tag(sampling_type)
 
     choice_keyword = DATASET_TO_CHOICE_KEYWORD[dataset_name]
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs)
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs, keys=keys)
 
     mouse_behav_dict = all_mice_behav_dict[mouse_id]
     trials_per_session = mouse_behav_dict['trials_per_session']
@@ -1710,8 +1623,8 @@ def plot_bias_distribution_results(dataset_name, mouse_id, sampling_type, num_bi
     get_model_bias_evolution_from_outputs(true_outputs, all_model_outputs, trials_per_session, full_filepath, mouse_id, num_bins=num_bins)
 
 
-def visualize_single_mouse_model_weights_and_aics(dataset_name, remove_bad_idxs=True):
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs)
+def visualize_single_mouse_model_weights_and_aics(dataset_name, remove_bad_idxs=True, keys=None):
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs, keys=keys)
     mouse_ids = list(all_mice_behav_dict.keys())
 
     for mouse_id in mouse_ids:
@@ -1722,3 +1635,29 @@ def visualize_single_mouse_model_weights_and_aics(dataset_name, remove_bad_idxs=
         make_single_mouse_aic_plot(dataset_name, mouse_id, save_path=aic_save_path)
 
 
+if __name__ == "__main__":
+    # witten dataset -- 22 mice, 14 experts
+    # saxe dataset -- 
+    dataset_name = 'witten'
+    # calculate number of mice
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=ALL_WITTEN_LEARNERS)
+
+    ids = [16, 36, 38, 43]
+    for mouse_id in ids:
+        # check number of sessions in mouse data and list session dates
+        mouse_dict = all_mice_behav_dict[mouse_id]
+        num_sessions = len(mouse_dict['trials_per_session'])
+        print(f'Mouse {mouse_id} has {num_sessions} sessions.')
+        print(f'Session nums for Mouse {mouse_id}: {mouse_dict["session_nums"]}')
+    print(1./0)
+
+    # calculate number of experts
+    expert_idxs = []
+    for i, mouse_id in enumerate(all_mice_behav_dict.keys()):
+        mouse_dict = all_mice_behav_dict[mouse_id]
+        expert = check_expert_status(mouse_dict)
+        if expert:
+            expert_idxs.append(i)
+
+    print(f'Number of mice: {len(all_mice_behav_dict)}')
+    print(f'Number of experts: {len(expert_idxs)}')
