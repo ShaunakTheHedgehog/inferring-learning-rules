@@ -55,10 +55,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-```bash
+<!-- ```bash
 python -m pytest tests/ -m "not slow"   # fast unit tests
 python -m pytest tests/                 # includes parameter-recovery tests
-```
+``` -->
 
 ## Citation
 
