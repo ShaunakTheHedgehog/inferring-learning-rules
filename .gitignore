@@ -8,6 +8,10 @@
 !*.py
 !**/*.py
 
+# Allow top-level docs and dependency lists
+!/README.md
+!/requirements.txt
+
 # Explicitly ignore common virtual environment folders
 .venv/
 venv/
