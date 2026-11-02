@@ -363,12 +363,10 @@ def apply_learning_updates(w, grads, log_lrs):
     return jax.tree_util.tree_map(lambda p, g, log_lr: p - jnp.exp(log_lr) * g, w, grads, log_lrs)
 
 
-
-
 # ── Training function ─────────────────────────────────────────────────────────
 
 def train_gd_network(nln_name, params, inputs, targets, lr, beta,
-                     key, num_grading_levels=4):
+                     key, num_grading_levels=4, print_stuff=True):
     """
     Train a minimal neural network on a simple binary decision-making task.
 
@@ -384,9 +382,6 @@ def train_gd_network(nln_name, params, inputs, targets, lr, beta,
     num_trials = inputs.shape[0]
     nln = get_nonlinearity(nln_name)
     full_input_set = generate_full_input_set(num_grading_levels)  # (2L+1, 3)
-
-    # ── Inner helpers (no @jit: they close over Python values and are
-    #    recreated each call, so JIT would retrace every time) ────────────────
 
     @jit
     def softmax_policy(out, key):
@@ -447,15 +442,17 @@ def train_gd_network(nln_name, params, inputs, targets, lr, beta,
         psychometrics[n] = psychometric_data(params)
         losses.append(float(loss))
 
-        if (n + 1) % 250 == 0:
-            print(f'step {n+1}, loss: {loss:.6f}')
+        if print_stuff and ((n + 1) % 250 == 0):
+            print(f'step {n+1}, loss: {loss:.6f}', flush=True)
 
     r_slopes = psychometrics[:, -1] - psychometrics[:, num_grading_levels]
     l_slopes = psychometrics[:, num_grading_levels] - psychometrics[:, 0]
 
     Rs = 1. - jnp.asarray(outputs) # convert from 0=R, 1=L to 1=R, 0=L for easier interpretation
     ma_bias = 2 * jnp.mean(Rs) - 1
-    print(f'MA bias (over all trials): {ma_bias:.4f}')
+    
+    if print_stuff:
+        print(f'Model-agnostic bias (over all trials): {ma_bias:.4f}', flush=True)
 
     return params, losses, {
         'params':        params,
