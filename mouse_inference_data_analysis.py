@@ -640,76 +640,76 @@ def plot_alpha_beta_scatterplot(dataset_name, alphas, betas, quantity, color_qua
 
 
 
-def get_resampled_model_outputs(mouse_results_dict, inference_model, nln_name, filepath, key, 
-                                num_test_sets=1_000, MAP_sampling=True):
+# def get_resampled_model_outputs(mouse_results_dict, inference_model, nln_name, filepath, key, 
+#                                 num_test_sets=1_000, MAP_sampling=True):
     
-    nln = get_nonlinearity(nln_name)
-    inputs = mouse_results_dict['inputs']
-    outputs = mouse_results_dict['outputs'].astype(jnp.int32)
-    rewards = mouse_results_dict['rewards'] 
-    targets = 1 - ((outputs + rewards.astype(jnp.int32)) % 2)
-    targets = targets.reshape((-1, 1))
+#     nln = get_nonlinearity(nln_name)
+#     inputs = mouse_results_dict['inputs']
+#     outputs = mouse_results_dict['outputs'].astype(jnp.int32)
+#     rewards = mouse_results_dict['rewards'] 
+#     targets = 1 - ((outputs + rewards.astype(jnp.int32)) % 2)
+#     targets = targets.reshape((-1, 1))
     
-    optim_dict = mouse_results_dict['optim_dict']
+#     optim_dict = mouse_results_dict['optim_dict']
     
-    best_converged_hyperparams = mouse_results_dict['inferred_hyperparams']
-    inferred_hyperparams, convergence_failed = find_best_hyperparams(optim_dict)
+#     best_converged_hyperparams = mouse_results_dict['inferred_hyperparams']
+#     inferred_hyperparams, convergence_failed = find_best_hyperparams(optim_dict)
     
-    if not convergence_failed:
-        assert best_converged_hyperparams.all() == inferred_hyperparams.all()
+#     if not convergence_failed:
+#         assert best_converged_hyperparams.all() == inferred_hyperparams.all()
 
-    all_model_outputs = []
+#     all_model_outputs = []
 
-    w0_MAP, depth, lrs_MAP, beta_MAP = extract_fitted_params(mouse_results_dict, inference_model, return_dict=True)
+#     w0_MAP, depth, lrs_MAP, beta_MAP = extract_fitted_params(mouse_results_dict, inference_model, return_dict=True)
 
-    print(f'Depth is {depth}', flush=True)
+#     print(f'Depth is {depth}', flush=True)
 
-    num_weights = NUM_TWO_LAYER_WEIGHTS
-    if depth == 'one-layer':
-        num_weights = NUM_ONE_LAYER_WEIGHTS
+#     num_weights = NUM_TWO_LAYER_WEIGHTS
+#     if depth == 'one-layer':
+#         num_weights = NUM_ONE_LAYER_WEIGHTS
 
-    skey, key = jr.split(key)
+#     skey, key = jr.split(key)
     
-    # sample hyperparam vectors from the Laplace approximation to the posterior 
-    x0 = inferred_hyperparams
+#     # sample hyperparam vectors from the Laplace approximation to the posterior 
+#     x0 = inferred_hyperparams
     
-    H, _ = compute_hessian(inferred_hyperparams, inputs, outputs, rewards, nln, inference_model, batched=False, alpha_W1=None, num_weights=num_weights, 
-                           ridge_lambda=RIDGE_LAMBDA, alphabeta_ridge=RIDGE_ALPHABETA, mu_alpha=MU_ALPHA, mu_beta=MU_BETA)
-    Sigma0 = jnp.linalg.inv(H)
-    xs = jr.multivariate_normal(skey, x0, Sigma0, (num_test_sets,))
-    sampling_tag = '_MAP_Laplace'
+#     H, _ = compute_hessian(inferred_hyperparams, inputs, outputs, rewards, nln, inference_model, batched=False, alpha_W1=None, num_weights=num_weights, 
+#                            ridge_lambda=RIDGE_LAMBDA, alphabeta_ridge=RIDGE_ALPHABETA, mu_alpha=MU_ALPHA, mu_beta=MU_BETA)
+#     Sigma0 = jnp.linalg.inv(H)
+#     xs = jr.multivariate_normal(skey, x0, Sigma0, (num_test_sets,))
+#     sampling_tag = '_MAP_Laplace'
     
-    # if Hessian has any eigenvalues that are negative or that blow up (for whatever reason), avoid MAP sampling
-    if (not jnp.isfinite(xs).all()) or (not MAP_sampling):
-        print(f"Proceeding without MAP sampling", flush=True)
-        xs = jnp.tile(x0, (num_test_sets, 1))
-        sampling_tag = ''
+#     # if Hessian has any eigenvalues that are negative or that blow up (for whatever reason), avoid MAP sampling
+#     if (not jnp.isfinite(xs).all()) or (not MAP_sampling):
+#         print(f"Proceeding without MAP sampling", flush=True)
+#         xs = jnp.tile(x0, (num_test_sets, 1))
+#         sampling_tag = ''
     
-    print('Starting training process...', flush=True)
+#     print('Starting training process...', flush=True)
 
-    for i in range(num_test_sets):
-        _, key = jr.split(key)
+#     for i in range(num_test_sets):
+#         _, key = jr.split(key)
 
-        curr_hyperparams = xs[i]
-        curr_lrs, curr_beta, curr_w0 = extract_lrs_beta_and_w0(curr_hyperparams, inference_model, return_dict=True)
+#         curr_hyperparams = xs[i]
+#         curr_lrs, curr_beta, curr_w0 = extract_lrs_beta_and_w0(curr_hyperparams, inference_model, return_dict=True)
 
-        _, _, results_dict = train_gd_network(nln_name, curr_w0, inputs, targets, curr_lrs[0], curr_beta, 
-                                              key, num_grading_levels=NUM_GRADING_LEVELS, print_stuff=False)
+#         _, _, results_dict = train_gd_network(nln_name, curr_w0, inputs, targets, curr_lrs[0], curr_beta, 
+#                                               key, num_grading_levels=NUM_GRADING_LEVELS, print_stuff=False)
 
-        model_outputs = results_dict['outputs']
-        model_outputs = jnp.asarray(model_outputs)
-        all_model_outputs.append(model_outputs)
+#         model_outputs = results_dict['outputs']
+#         model_outputs = jnp.asarray(model_outputs)
+#         all_model_outputs.append(model_outputs)
 
 
-    # make all_model_outputs a numpy array of dtype bool
-    all_model_outputs = np.array(all_model_outputs).astype(bool) 
-    if filepath is not None:
-        np.save(f'{filepath}/all_model_outputs{sampling_tag}.npy', all_model_outputs)
+#     # make all_model_outputs a numpy array of dtype bool
+#     all_model_outputs = np.array(all_model_outputs).astype(bool) 
+#     if filepath is not None:
+#         np.save(f'{filepath}/all_model_outputs{sampling_tag}.npy', all_model_outputs)
         
-        xs = np.asarray(xs)
-        np.save(f'{filepath}/all_model_init_hyperparams{sampling_tag}.npy', xs)
+#         xs = np.asarray(xs)
+#         np.save(f'{filepath}/all_model_init_hyperparams{sampling_tag}.npy', xs)
 
-    return all_model_outputs
+#     return all_model_outputs
 
 
 
@@ -1599,28 +1599,6 @@ def plot_acc_alignment_distributions(dataset_name, mouse_ids,
         plt.show()
 
     return mean_r2 #, mean_mse
-    
-
-
-def plot_bias_distribution_results(dataset_name, mouse_id, sampling_type, num_bins=30, remove_bad_idxs=True, keys=None):
-
-    file_identifier = f'mouse_{mouse_id}'
-    sampling_tag = get_sampling_tag(sampling_type)
-
-    choice_keyword = DATASET_TO_CHOICE_KEYWORD[dataset_name]
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=remove_bad_idxs, keys=keys)
-
-    mouse_behav_dict = all_mice_behav_dict[mouse_id]
-    trials_per_session = mouse_behav_dict['trials_per_session']
-    
-    true_outputs = np.asarray(mouse_behav_dict[choice_keyword])
-    true_outputs = true_outputs.astype(np.int32)
-
-    full_filepath = f'{dataset_name}_data_GD_analysis_final/single_trial_results/{inference_model}_{nln_name}_{depth}_results/{file_identifier}'
-
-    all_model_outputs = np.load(f'{full_filepath}/all_model_outputs{sampling_tag}.npy')
-
-    get_model_bias_evolution_from_outputs(true_outputs, all_model_outputs, trials_per_session, full_filepath, mouse_id, num_bins=num_bins)
 
 
 def visualize_single_mouse_model_weights_and_aics(dataset_name, remove_bad_idxs=True, keys=None):
@@ -1641,6 +1619,11 @@ if __name__ == "__main__":
     dataset_name = 'witten'
     # calculate number of mice
     all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=ALL_WITTEN_LEARNERS)
+
+    mouse_dict = all_mice_behav_dict[35]
+    total_trials = len(mouse_dict['rewards'])
+    print(f'Mouse 35 has {total_trials} total trials.')
+    print(1./0)
 
     ids = [16, 36, 38, 43]
     for mouse_id in ids:
