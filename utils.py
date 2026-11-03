@@ -27,6 +27,12 @@ from scipy.optimize import curve_fit
 from globals import NUM_GRADING_LEVELS
 
 
+def get_saxe_identifier(mouse_id):
+    """
+    Given a mouse ID, return the int part of it, after 'DAP'. """
+    return int(mouse_id.split('DAP')[-1])
+
+
 def flip_outputs(y):
     assert y.ndim == 1
     flipped = 1 - y

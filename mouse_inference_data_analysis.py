@@ -27,7 +27,7 @@ from sklearn.preprocessing import StandardScaler
 from scipy import stats
 from scipy.ndimage import gaussian_filter1d
 
-from utils import flatten_params, compute_two_layer_flattened_net_params, compute_rightward_statistics, calculate_model_agnostic_bias, plot_psychometrics, visualize_weight_trajectories
+from utils import flatten_params, compute_two_layer_flattened_net_params, compute_rightward_statistics, calculate_model_agnostic_bias, plot_psychometrics, visualize_weight_trajectories, get_saxe_identifier
 from utils import generate_per_session_psychometrics, calculate_normalized_avg_acc, calculate_trial_averaged_acc
 from utils import run_linear_regression, get_biases_per_session, calculate_simple_mouse_ma_bias, get_biases_per_session_batched, get_nonlinearity
 from utils import visualize_weight_trajectories, calculate_accs_per_session, calculate_batched_quantity_per_session, calculate_running_avg_quantity
@@ -1616,9 +1616,18 @@ def visualize_single_mouse_model_weights_and_aics(dataset_name, remove_bad_idxs=
 if __name__ == "__main__":
     # witten dataset -- 22 mice, 14 experts
     # saxe dataset -- 
-    dataset_name = 'witten'
+    dataset_name = 'saxe'
     # calculate number of mice
-    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=ALL_WITTEN_LEARNERS)
+    all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=ALL_SAXE_LEARNERS)
+
+    print(all_mice_behav_dict.keys())
+    print(f'Number of mice: {len(all_mice_behav_dict)}')
+
+    keys = list(all_mice_behav_dict.keys())
+    int_ids = [get_saxe_identifier(k) for k in keys]
+
+    print(int_ids)
+    print(1./0)
 
     mouse_dict = all_mice_behav_dict[35]
     total_trials = len(mouse_dict['rewards'])

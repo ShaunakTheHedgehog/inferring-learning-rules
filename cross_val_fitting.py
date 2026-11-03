@@ -33,9 +33,9 @@ import jax.numpy as jnp
 import jax.random as jr
 import numpy as np
 
-from globals import MU_ALPHA, MU_BETA, RIDGE_LAMBDA, RIDGE_ALPHABETA
+from globals import MU_ALPHA, MU_BETA, RIDGE_LAMBDA, RIDGE_ALPHABETA, ALL_SAXE_LEARNERS, DATASET_TO_CHOICE_KEYWORD
 from utils import (get_nonlinearity, make_kfold_train_masks, tanh_p, flip_outputs,
-                   check_writable, to_numpy)
+                   check_writable, to_numpy, get_saxe_identifier)
 from inference_utils import convert_weights_to_dict, get_num_alphas
 from inference_pipeline import (
     run_randomized_optimization_procedure,
@@ -74,14 +74,14 @@ def load_mouse_data(dataset_name):
         return pkl.load(f)
 
 
-def get_mouse_arrays(mouse_dict):
+def get_mouse_arrays(mouse_dict, dataset):
     """Extract (inputs, outputs, rewards) as JAX arrays with the dtypes the pipeline expects.
 
     `outputs` are stored as floats but index into the model's Q-values, so they must be
     integer-typed (0 = right, 1 = left).
     """
     inputs = jnp.asarray(mouse_dict['inputs'], dtype=jnp.float64)
-    outputs = jnp.asarray(mouse_dict['outputs']).astype(jnp.int32)
+    outputs = jnp.asarray(mouse_dict[DATASET_TO_CHOICE_KEYWORD[dataset]]).astype(jnp.int32)
     rewards = jnp.asarray(mouse_dict['rewards'], dtype=jnp.float64)
     return inputs, outputs, rewards
 
@@ -247,6 +247,8 @@ def main():
         args.mu_alpha = 0.0 if family == 'RF' else MU_ALPHA
 
     all_data = load_mouse_data(args.dataset)
+    if args.dataset == 'saxe':
+        all_data = {k: v for k, v in all_data.items() if k in ALL_SAXE_LEARNERS}  # filter out non-learners, which are not analyzed in the paper
     mouse_ids = sorted(all_data.keys())
     tasks = build_task_list(mouse_ids, args.K)
 
@@ -301,7 +303,7 @@ def main():
         print(f'{out_path} already exists; use --overwrite to refit. Exiting.', flush=True)
         return
 
-    inputs, outputs, rewards = get_mouse_arrays(all_data[mouse_id])
+    inputs, outputs, rewards = get_mouse_arrays(all_data[mouse_id], args.dataset)
     T = int(outputs.shape[0])
 
     # THE CHOICE FLIP (RF only): the dataset codes 0 = right / 1 = left, but
@@ -322,7 +324,7 @@ def main():
     # regenerates exactly the same partition without needing to coordinate. That identity
     # is what makes the folds disjoint/exhaustive and the model comparison paired.
     # Bumping --fold_seed gives a fresh set of partitions for a repeated-K-fold replicate.
-    fold_key = jr.fold_in(jr.PRNGKey(args.fold_seed), mouse_id)
+    fold_key = jr.fold_in(jr.PRNGKey(args.fold_seed), get_saxe_identifier(mouse_id) if args.dataset == 'saxe' else mouse_id)
     train_masks = make_kfold_train_masks(T, fold_key, K=args.K, block_length=args.block_length)
     train_mask = train_masks[fold]
     n_train, n_test = int(jnp.sum(train_mask)), int(jnp.sum(~train_mask))
