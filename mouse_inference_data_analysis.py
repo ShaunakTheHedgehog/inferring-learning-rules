@@ -46,7 +46,7 @@ from metric_GD_network import fit_metric_GD_net, generate_metric_GD_train_test_s
 
 def load_data(dataset_name, remove_bad_idxs=True, keys=None):
     assert dataset_name in ['witten', 'saxe'], f'Invalid dataset name: {dataset_name}'
-    with open(f'{dataset_name}_data_GD_analysis_final/{dataset_name}_mouse_data.pkl', 'rb') as f:
+    with open(f'{dataset_name}_data_GD_analysis_CLEANED/{dataset_name}_mouse_data.pkl', 'rb') as f:
         data = pkl.load(f)
 
     if keys is None:
@@ -98,7 +98,7 @@ def get_mouse_aics(dataset_name, mouse_id):
         inference_model, depth, nln_name, num_params, _ = value 
         nln = get_nonlinearity(nln_name)
     
-        results_dict = pkl.load(open(f'{dataset_name}_data_GD_analysis_final/fitted_models/{inference_model}_{nln_name}_{depth}/mouse_{mouse_id}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
+        results_dict = pkl.load(open(f'{dataset_name}_data_GD_analysis_CLEANED/fitted_models/{inference_model}_{nln_name}_{depth}/mouse_{mouse_id}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
         x0, _ = find_best_hyperparams(results_dict['optim_dict'])
         inputs = results_dict['inputs']
         outputs = results_dict['outputs'].astype(jnp.int32)
@@ -227,7 +227,7 @@ def check_expert_status(mouse_dict, threshold=EXPERT_THRESHOLD, num_final_sessio
 
 
 def visualize_mouse_inferred_weights(dataset_name, mouse_id, save_path=None, stride=1):
-    all_mice_dict = pkl.load(open(f'{dataset_name}_data_GD_analysis_final/{dataset_name}_mouse_data.pkl', 'rb'))
+    all_mice_dict = pkl.load(open(f'{dataset_name}_data_GD_analysis_CLEANED/{dataset_name}_mouse_data.pkl', 'rb'))
     mouse_dict = all_mice_dict[mouse_id]
 
     inputs = mouse_dict['inputs']
@@ -255,7 +255,7 @@ def visualize_mouse_inferred_weights(dataset_name, mouse_id, save_path=None, str
 
     for i, key in enumerate(MODEL_CLASS_INFO):
         inference_model, depth, nln_name, num_params, color = MODEL_CLASS_INFO[key]
-        results_dict = pkl.load(open(f'{dataset_name}_data_GD_analysis_final/fitted_models/{inference_model}_{nln_name}_{depth}/mouse_{mouse_id}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
+        results_dict = pkl.load(open(f'{dataset_name}_data_GD_analysis_CLEANED/fitted_models/{inference_model}_{nln_name}_{depth}/mouse_{mouse_id}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
         hyperparams, _ = find_best_hyperparams(results_dict['optim_dict'])
 
         nln = get_nonlinearity(nln_name)
@@ -795,11 +795,11 @@ def explore_expert_metrics(dataset_name, depth, nln_name, inference_model='gd', 
 
         if dataset_name == 'witten_and_saxe':
             try:
-                results_dict = pkl.load(open(f'witten_data_GD_analysis_final/fitted_models/{inference_model}_{nln_name}_{depth}/{file_identifier}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
+                results_dict = pkl.load(open(f'witten_data_GD_analysis_CLEANED/fitted_models/{inference_model}_{nln_name}_{depth}/{file_identifier}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
             except:
-                results_dict = pkl.load(open(f'saxe_data_GD_analysis_final/fitted_models/{inference_model}_{nln_name}_{depth}/{file_identifier}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
+                results_dict = pkl.load(open(f'saxe_data_GD_analysis_CLEANED/fitted_models/{inference_model}_{nln_name}_{depth}/{file_identifier}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
         else:
-            results_dict = pkl.load(open(f'{dataset_name}_data_GD_analysis_final/fitted_models/{inference_model}_{nln_name}_{depth}/{file_identifier}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
+            results_dict = pkl.load(open(f'{dataset_name}_data_GD_analysis_CLEANED/fitted_models/{inference_model}_{nln_name}_{depth}/{file_identifier}_results_{depth}_{inference_model}_{nln_name}.pkl', 'rb'))
 
         inferred_hyperparams, _ = find_best_hyperparams(results_dict['optim_dict'])
 
@@ -912,18 +912,18 @@ def explore_expert_metrics(dataset_name, depth, nln_name, inference_model='gd', 
 
 
 def generate_aggregate_model_metrics(dataset_name, plot_pc_idx1=1, plot_pc_idx2=2, remove_bad_idxs=True, keys=None):
-    erf_directory = f'{dataset_name}_data_GD_analysis_final/aggregate_results/gd_erf_two-layer'
+    erf_directory = f'{dataset_name}_data_GD_analysis_CLEANED/aggregate_results/gd_erf_two-layer'
     explore_expert_metrics(dataset_name, depth='two-layer', nln_name='erf', inference_model='gd', filepath=erf_directory,
                            plot_pc_idx1=plot_pc_idx1, plot_pc_idx2=plot_pc_idx2, remove_bad_idxs=remove_bad_idxs, keys=keys)
 
     print('Done with 2-layer nonlinear, starting 2-layer linear...')
 
-    explore_expert_metrics(dataset_name, depth='two-layer', nln_name='linear', inference_model='gd', filepath=f'{dataset_name}_data_GD_analysis_final/aggregate_results/gd_linear_two-layer',
+    explore_expert_metrics(dataset_name, depth='two-layer', nln_name='linear', inference_model='gd', filepath=f'{dataset_name}_data_GD_analysis_CLEANED/aggregate_results/gd_linear_two-layer',
                            plot_pc_idx1=plot_pc_idx1, plot_pc_idx2=plot_pc_idx2, keys=keys)
 
     print('Done with 2-layer linear, starting 1-layer linear...')
 
-    explore_expert_metrics(dataset_name, depth='one-layer', nln_name='linear', inference_model='gd', filepath=f'{dataset_name}_data_GD_analysis_final/aggregate_results/gd_linear_one-layer',
+    explore_expert_metrics(dataset_name, depth='one-layer', nln_name='linear', inference_model='gd', filepath=f'{dataset_name}_data_GD_analysis_CLEANED/aggregate_results/gd_linear_one-layer',
                            plot_pc_idx1=plot_pc_idx1, plot_pc_idx2=plot_pc_idx2, keys=keys)
 
 
@@ -1275,7 +1275,7 @@ def get_stage_bounds(num_time_steps, stage, length=2_000, true_mouse_accs=None, 
 def get_stage_accs(dataset_name, mouse_id, stage, stage_length, top_k, window, stride, 
                    sampling_type='deterministic', trials_per_session=None, plot=True, save_label='', save=False, ymin=0.4):
     assert stage in ['early', 'middle', 'late']
-    plot_filepath = f'{dataset_name}_data_GD_analysis_final/single_trial_results/running_accs/single_trial'
+    plot_filepath = f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results/running_accs/single_trial'
 
     mean_accs = {'true_mouse': np.zeros(stage_length), '1-Layer Linear': np.zeros(stage_length),
                  '2-Layer Linear': np.zeros(stage_length), '2-Layer Nonlinear': np.zeros(stage_length)}
@@ -1378,7 +1378,7 @@ def get_pearson_r2_for_accs(dataset_name, mouse_id, stage, stage_length, top_k, 
     for key, value in MODEL_CLASS_INFO.items():
         inference_model, depth, nln_name, _, color = value
 
-        all_model_outputs = np.load(f'{dataset_name}_data_GD_analysis_final/single_trial_results/{inference_model}_{nln_name}_{depth}_results/{file_identifier}/all_model_outputs{sampling_tag}.npy')
+        all_model_outputs = np.load(f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results/{inference_model}_{nln_name}_{depth}_results/{file_identifier}/all_model_outputs{sampling_tag}.npy')
 
         _, k_best_model_outputs, _ = find_best_matching_model_outputs(true_outputs, all_model_outputs, top_k=top_k)
         k_best_rewards = (k_best_model_outputs == targets.reshape(1, -1)).astype(jnp.int32)
@@ -1418,7 +1418,7 @@ def get_reconstructed_running_accs(dataset_name, mouse_id,
 
     true_running_accs = calculate_running_avg_quantity(true_rewards, window)
 
-    # plot_filepath = f'{dataset_name}_data_GD_analysis_final/single_trial_results/running_accs'
+    # plot_filepath = f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results/running_accs'
 
     num_trials = len(targets)
     # colors = ['blue', 'orange', 'green']
@@ -1432,7 +1432,7 @@ def get_reconstructed_running_accs(dataset_name, mouse_id,
     for key, value in MODEL_CLASS_INFO.items():
         inference_model, depth, nln_name, _, color = value
 
-        all_model_outputs = np.load(f'{dataset_name}_data_GD_analysis_final/single_trial_results/{inference_model}_{nln_name}_{depth}_results/{file_identifier}/all_model_outputs{sampling_tag}.npy')
+        all_model_outputs = np.load(f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results/{inference_model}_{nln_name}_{depth}_results/{file_identifier}/all_model_outputs{sampling_tag}.npy')
 
         _, k_best_model_outputs, _ = find_best_matching_model_outputs(true_outputs, all_model_outputs, top_k=top_k)
         avg_running_accs, min_running_accs, max_running_accs, std_running_accs, sem_running_accs = get_running_accs_from_best_matching_outputs(true_outputs, all_model_outputs, targets, top_k, window)
@@ -1606,8 +1606,8 @@ def visualize_single_mouse_model_weights_and_aics(dataset_name, remove_bad_idxs=
     mouse_ids = list(all_mice_behav_dict.keys())
 
     for mouse_id in mouse_ids:
-        aic_save_path = f'{dataset_name}_data_GD_analysis_final/single_trial_results/single_mouse_aics/mouse_{mouse_id}_aics.pdf'
-        weighttraj_save_path = f'{dataset_name}_data_GD_analysis_final/single_trial_results/mouse_inferred_weights/mouse_{mouse_id}_inferred_weights.pdf'
+        aic_save_path = f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results/single_mouse_aics/mouse_{mouse_id}_aics.pdf'
+        weighttraj_save_path = f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results/mouse_inferred_weights/mouse_{mouse_id}_inferred_weights.pdf'
 
         visualize_mouse_inferred_weights(dataset_name, mouse_id, save_path=weighttraj_save_path, stride=1)
         make_single_mouse_aic_plot(dataset_name, mouse_id, save_path=aic_save_path)

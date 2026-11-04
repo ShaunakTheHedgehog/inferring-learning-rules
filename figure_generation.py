@@ -52,7 +52,7 @@ def generate_single_mouse_model_psychometrics(dataset_name, top_k, specific_grad
         print(f'Expert: {expert}')
         print(f'Bias: {ma_bias}')
 
-        base_filepath = f'{dataset_name}_data_GD_analysis_final/single_trial_results'
+        base_filepath = f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results'
 
         trials_per_session = mouse_dict['trials_per_session']
         print(f'Num Sessions: {len(trials_per_session)}\n')
@@ -77,7 +77,7 @@ def generate_single_mouse_model_psychometrics(dataset_name, top_k, specific_grad
             model_name = MODEL_PLOT_NAMES[i]
             inference_model, depth, nln_name, num_params, color = MODEL_CLASS_INFO[key]
 
-            model_outputs = np.load(f'{dataset_name}_data_GD_analysis_final/single_trial_results/{inference_model}_{nln_name}_{depth}_results/mouse_{mouse_id}/all_model_outputs.npy')
+            model_outputs = np.load(f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results/{inference_model}_{nln_name}_{depth}_results/mouse_{mouse_id}/all_model_outputs.npy')
             best_model_outputs, k_best_model_outputs, _ = find_best_matching_model_outputs(outputs, model_outputs, top_k=top_k)
 
             avg_model_psychometrics = np.zeros_like(true_psychometrics)
@@ -96,7 +96,7 @@ def generate_single_mouse_model_psychometrics(dataset_name, top_k, specific_grad
 
 def visualize_model_evolution(dataset_name, mouse_ids, grading=0.125, custom_slope_ticks=[-2., 0., 2., 4.], slope_ylim=(-2.2, 4.2),
                               plot_slopes=True, keys=None):
-    base_filepath = f'{dataset_name}_data_GD_analysis_final/single_trial_results'
+    base_filepath = f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results'
     all_mice_behav_dict = load_data(dataset_name, remove_bad_idxs=True, keys=keys)
 
     for mouse_id in mouse_ids:
@@ -153,7 +153,7 @@ def visualize_reconstructed_accs(dataset_name, top_k, plot=True, save=True, keys
 
         num_trials = len(all_mice_behav_dict[mouse_id]['inputs'])
 
-        plot_filepath = f'{dataset_name}_data_GD_analysis_final/single_trial_results/running_accs/top{top_k}'
+        plot_filepath = f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results/running_accs/top{top_k}'
         running_accs_info, r2s, _, _ = get_reconstructed_running_accs(dataset_name, mouse_id,
                                         top_k, window=200, stride=50, sampling_type='deterministic',
                                         plot=plot, legend=False, save=save, plot_filepath=plot_filepath,
@@ -164,8 +164,8 @@ def visualize_reconstructed_accs(dataset_name, top_k, plot=True, save=True, keys
     all_r2s = np.asarray(all_r2s)    
 
     print(f'Num experts: {len(expert_idxs)} out of {len(mouse_ids)} total mice.')
-    make_2D_scatterplot(all_r2s, 'two-layer nonlinear', 'one-layer linear', expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_final/aggregate_results/reconstructed_accs/top{top_k}_R2_vs_onelayer_NEW.pdf', measure=r'$R^2$')
-    make_2D_scatterplot(all_r2s, 'two-layer nonlinear', 'two-layer linear', expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_final/aggregate_results/reconstructed_accs/top{top_k}_R2_vs_twolayer_NEW.pdf', measure=r'$R^2$')
+    make_2D_scatterplot(all_r2s, 'two-layer nonlinear', 'one-layer linear', expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_CLEANED/aggregate_results/reconstructed_accs/top{top_k}_R2_vs_onelayer_NEW.pdf', measure=r'$R^2$')
+    make_2D_scatterplot(all_r2s, 'two-layer nonlinear', 'two-layer linear', expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_CLEANED/aggregate_results/reconstructed_accs/top{top_k}_R2_vs_twolayer_NEW.pdf', measure=r'$R^2$')
 
 
 def visualize_trialwise_accs(dataset_name, top_k, stage_length=2_000,window=100, stride=25, ymin=0.4, keys=None):
@@ -214,7 +214,7 @@ def visualize_trialwise_accs(dataset_name, top_k, stage_length=2_000,window=100,
                 pearsons = get_pearson_r2_for_accs(dataset_name, mouse_id, stage, stage_length=stage_length, top_k=top_k, window=window, 
                                 sampling_type='deterministic')
                 # print(pearsons)
-                filepath = f'{dataset_name}_data_GD_analysis_final/single_trial_results/running_accs/single_trial/mouse_{mouse_id}_pearson_corrs_{stage}_stage_length={stage_length}_top{top_k}_window={window}_stride={stride}.pdf'
+                filepath = f'{dataset_name}_data_GD_analysis_CLEANED/single_trial_results/running_accs/single_trial/mouse_{mouse_id}_pearson_corrs_{stage}_stage_length={stage_length}_top{top_k}_window={window}_stride={stride}.pdf'
                 visualize_r2_distributions(pearsons, MODEL_COLORS, filepath=filepath, xlabel=f'Pearson Correlation')
                 
         
@@ -230,7 +230,7 @@ def generate_aggregate_model_statistics(dataset_name, remove_bad_idxs=True):
     aic_data, nll_data, expert_idxs = generate_model_nll_comparison(dataset_name, get_aic_per_trial=True, remove_bad_idxs=True)
     print(f'Number of expert mice: {len(expert_idxs)}')
 
-    save_path = f'{dataset_name}_data_GD_analysis_final/aggregate_results/rel_aic_jitterplot.pdf'
+    save_path = f'{dataset_name}_data_GD_analysis_CLEANED/aggregate_results/rel_aic_jitterplot.pdf'
     make_jitterplot(aic_data, expert_idxs, save_path=save_path, show_legend=False, plot_sem=True, ticksize=26, ylabel='',
                     custom_yticks=[0., 0.1, 0.2])
 
@@ -272,7 +272,7 @@ if __name__ == "__main__":
     dataset_name = 'witten'
     keys = ALL_WITTEN_LEARNERS
     aic_data, _, expert_idxs = generate_model_nll_comparison(dataset_name, get_aic_per_trial=True, remove_bad_idxs=True, keys=keys)
-    make_jitterplot(aic_data, expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_final/aggregate_results/rel_aic_jitterplot_NEW_UNCOLORED.pdf', plot_sem=True, custom_yticks=[0., 0.1, 0.2], ticksize=25)
+    make_jitterplot(aic_data, expert_idxs, save_path=f'{dataset_name}_data_GD_analysis_CLEANED/aggregate_results/rel_aic_jitterplot_NEW_UNCOLORED.pdf', plot_sem=True, custom_yticks=[0., 0.1, 0.2], ticksize=25)
     # print(1./0)
 
     # generate_aggregate_model_metrics('saxe', plot_pc_idx1=2, plot_pc_idx2=3, remove_bad_idxs=True, keys=keys)

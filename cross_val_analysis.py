@@ -24,7 +24,7 @@ def load_cv_results(dataset_name, mouse_id, model, fold, results_type='test_nll'
     sat_tag = ""
     if sat_inputs:
         sat_tag = "_sat_inputs"
-    path = os.path.join(data_root, f'{dataset_name}_cross_val_results{sat_tag}',
+    path = os.path.join(data_root, f'{dataset_name}_cross_val_results_CLEANED{sat_tag}',
                        f'{model}', f'mouse_{mouse_id}', f'fold_{fold}_foldseed_{foldseed}.pkl')
     with open(path, 'rb') as f:
         results = pkl.load(f)
@@ -69,7 +69,7 @@ if __name__ == "__main__":
     dataset_name = 'witten'
     K = 5
 
-    path = os.path.join(f'{dataset_name}_data_GD_analysis_final',
+    path = os.path.join(f'{dataset_name}_data_GD_analysis_CLEANED',
                             f'{dataset_name}_mouse_data.pkl')
     with open(path, 'rb') as f:
         witten_data = pkl.load(f)
@@ -115,7 +115,7 @@ if __name__ == "__main__":
 
         print(f'{mouse_id}: {mean_nlls[i]}')
 
-    make_jitterplot(mean_nlls, expert_idxs, save_path=f'witten_data_GD_analysis_final/aggregate_results/CV_nll_jitterplot_NEW.pdf', plot_type=None, ylabel=r'Mean $\Delta$NLL', plot_sem=True)
+    make_jitterplot(mean_nlls, expert_idxs, save_path=f'witten_data_GD_analysis_CLEANED/aggregate_results/CV_nll_jitterplot_NEW.pdf', plot_type=None, ylabel=r'Mean $\Delta$NLL', plot_sem=True)
 
     print(np.argmin(mean_nlls, axis=1))
 
